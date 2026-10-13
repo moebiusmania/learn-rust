@@ -1,0 +1,26 @@
+{
+  "title": "Where does unsafe begin?",
+  "subtitle": "Pick an operation to see if it needs unsafe and what you must guarantee",
+  "operations": "Operations",
+  "layers": {
+    "safe": "Safe Rust · the compiler proves it",
+    "unsafe": "unsafe { } · you prove it",
+    "raw": "Raw memory & FFI"
+  },
+  "safe": "Safe",
+  "needsUnsafe": "Requires unsafe",
+  "invariant": "What must hold",
+  "ops": {
+    "index": { "label": "Index a Vec", "text": "Bounds are checked at runtime: an out-of-range index panics, it never reads foreign memory. Use <code>get(i)</code> to get an <code>Option</code> instead." },
+    "rawCreate": { "label": "Create a raw pointer", "text": "Creating, copying, comparing or printing a raw pointer is safe. A pointer is just an address until someone dereferences it." },
+    "intToPtr": { "label": "Cast an integer to a pointer", "text": "Also safe: the result may be dangling or misaligned, but holding it is harmless. The danger begins at the dereference." },
+    "forget": { "label": "Leak memory", "text": "Surprisingly safe. Leaks cannot cause undefined behaviour, so <code>mem::forget</code> and <code>Box::leak</code> are safe functions. Memory safety ≠ no leaks." },
+    "deref": { "label": "Dereference a raw pointer", "text": "The pointer must be non-null, aligned, point to a live and initialized value of that type, and must not violate aliasing: no live <code>&mut</code> to the same place while you read or write through it." },
+    "unsafeFn": { "label": "Call an unsafe fn", "text": "The caller must uphold the function's documented preconditions. For <code>get_unchecked(i)</code>: <code>i &lt; len</code>, otherwise it reads out of bounds." },
+    "staticMut": { "label": "Mutate a static mut", "text": "No other thread may access it at the same time, and no reference to it may be alive. In edition 2024 references to <code>static mut</code> are rejected: prefer atomics, <code>Mutex</code> or <code>&raw mut</code>." },
+    "union": { "label": "Read a union field", "text": "The bytes currently stored must be a valid value of the field's type. Reading an <code>f32</code> union field as a <code>bool</code> could produce an invalid bool, which is undefined behaviour." },
+    "unsafeImpl": { "label": "Implement Send/Sync manually", "text": "You promise the type really is safe to move or share between threads. The compiler will trust this promise everywhere the type is used." },
+    "ffi": { "label": "Call a C function", "text": "The declared signature must match the C side exactly, and every pointer you pass must satisfy the C function's contract (valid, NUL-terminated, large enough, not freed twice)." }
+  },
+  "stillChecked": "Inside an unsafe block the borrow checker, type checker and lifetimes still run as usual. unsafe only unlocks the operations above."
+}

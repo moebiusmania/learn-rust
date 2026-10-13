@@ -1,0 +1,62 @@
+{
+  "title": "Drop order, step by step",
+  "subtitle": "Live values on the stack and the output the program prints",
+  "prev": "Previous",
+  "next": "Next",
+  "restart": "Restart",
+  "stack": "Live values",
+  "log": "Program output",
+  "empty": "nothing printed yet",
+  "noValues": "no live values",
+  "step": "Step {n} of {total}",
+  "noisyNote": "Noisy(name) prints \"drop name\" when it is dropped",
+  "presets": [
+    {
+      "label": "Nested scopes",
+      "steps": [
+        "<code>a</code> is created and owned by <code>main</code>'s scope.",
+        "Entering a block opens a new scope. <code>b</code> is pushed on top of <code>a</code>.",
+        "<code>c</code> is declared after <code>b</code>, so it sits above it.",
+        "The block ends. Locals are dropped in <strong>reverse declaration order</strong>: <code>c</code> first…",
+        "…then <code>b</code>. Nothing from the inner scope survives the closing brace.",
+        "Back in <code>main</code>, <code>d</code> is declared after <code>a</code>.",
+        "<code>main</code> returns: <code>d</code> is dropped first, as the most recent local…",
+        "…and <code>a</code> last. The order is fully determined by the source code: no collector decides it."
+      ]
+    },
+    {
+      "label": "Struct fields",
+      "steps": [
+        "<code>x</code> is a plain local.",
+        "<code>p</code> owns two fields. Fields are not separate locals: they live inside <code>p</code>.",
+        "At the end of <code>main</code>, <code>p</code> goes first (declared last). Its own <code>Drop::drop</code> runs <em>before</em> its fields, while they are still usable.",
+        "Then the fields are dropped in <strong>declaration order</strong> (not reverse!): <code>first</code>…",
+        "…then <code>second</code>. Now <code>p</code> is completely gone.",
+        "Finally <code>x</code>, the earliest local."
+      ]
+    },
+    {
+      "label": "Vec of items",
+      "steps": [
+        "The <code>Vec</code> lives on the stack (pointer, length, capacity); its three elements live in a heap buffer it owns.",
+        "<code>t</code> is declared after <code>v</code>.",
+        "Reverse declaration order: <code>t</code> is dropped first.",
+        "Dropping a <code>Vec</code> drops its elements <strong>front to back</strong>: <code>v0</code>…",
+        "…<code>v1</code>…",
+        "…<code>v2</code>, and then the heap buffer itself is freed."
+      ]
+    },
+    {
+      "label": "Panic unwinding",
+      "steps": [
+        "<code>_m</code> is a guard in <code>main</code>'s frame.",
+        "<code>main</code> calls <code>inner()</code>: a new frame is pushed.",
+        "<code>_g</code> lives in <code>inner</code>'s frame.",
+        "<code>panic!</code> runs the panic hook, which prints the message to stderr. Then unwinding starts.",
+        "Unwinding walks back up the call stack, running destructors frame by frame: <code>_g</code> first.",
+        "Then <code>main</code>'s locals. Guards (locks, files, transactions) are released even on a panic. <code>never printed</code> is never reached.",
+        "The panic reached the top of the main thread: the process exits with code 101. With <code>panic = \"abort\"</code> none of these drops would run."
+      ]
+    }
+  ]
+}

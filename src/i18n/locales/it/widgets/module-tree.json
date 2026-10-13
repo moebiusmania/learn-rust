@@ -1,0 +1,23 @@
+{
+  "title": "Chi vede cosa?",
+  "subtitle": "Scegli il modulo in cui stai scrivendo codice, poi l'elemento che vuoi usare",
+  "from": "Codice scritto in",
+  "target": "Vuole usare",
+  "here": "sei qui",
+  "vis": {
+    "priv": "privato",
+    "super": "pub(super)",
+    "crate": "pub(crate)",
+    "pub": "pub"
+  },
+  "rule": {
+    "priv": "privato: visibile solo dentro <code>{scope}</code> e nei suoi discendenti",
+    "super": "<code>pub(super)</code>: visibile nel modulo padre <code>{scope}</code> e nei suoi discendenti",
+    "crate": "<code>pub(crate)</code>: visibile ovunque in questo crate, mai negli altri crate",
+    "pub": "<code>pub</code>: visibile ovunque sia visibile il percorso che lo contiene, anche da altri crate"
+  },
+  "ok": "Accessibile. Ogni segmento del percorso è visibile da <code>{from}</code>.",
+  "blocked": "Errore E0603 / E0451: <code>{item}</code> è privato da qui. Il compilatore si ferma al primo segmento che non puoi vedere.",
+  "stepOk": "visibile",
+  "stepBlocked": "non visibile"
+}

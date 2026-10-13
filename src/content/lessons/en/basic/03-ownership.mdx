@@ -1,0 +1,195 @@
+---
+title: Ownership and moves
+description: How Rust frees memory without a garbage collector, what a move really copies, and when values are dropped.
+duration: 25
+tags: [ownership, move, Copy, Clone, Drop, stack vs heap]
+---
+
+Every language has to answer one question: *when can this memory be freed?* C and C++ leave it to you, and you get leaks, double frees and use-after-free bugs. Java, Go, Python and JavaScript hand it to a garbage collector, and you pay with pauses, higher memory usage and no control over when cleanup happens. Rust takes a third route: **every value has exactly one owner, and the value is freed when its owner goes out of scope**. The compiler checks the rules, so the cost at runtime is zero.
+
+This lesson is the heart of the language. Take your time with the visualizer.
+
+## Stack, heap and what a String looks like
+
+You already know the distinction; here is how Rust maps types onto it. Values whose size is known at compile time (integers, floats, `bool`, `char`, arrays, tuples and structs of those) live inline: on the stack for local variables. Data whose size is only known at runtime lives on the heap, behind a small fixed-size handle.
+
+A `String` is exactly such a handle: a 24-byte struct (on 64-bit targets) with a **pointer** to a heap buffer, a **length** and a **capacity**. A string literal like `"hello"` is different: its bytes are baked into the read-only data of the binary, and you get a `&'static str`, a borrowed view that lives for the whole program.
+
+```rust
+let literal: &str = "hello";              // points into the binary, no allocation
+let owned: String = String::from("hello"); // allocates 5 bytes on the heap
+let size = std::mem::size_of::<String>();  // 24: ptr + len + cap
+```
+
+## The rules
+
+1. Each value has a single **owner**, a variable or a field.
+2. Ownership can be **moved** to another owner; the previous one becomes unusable.
+3. When the owner goes out of scope, the value is **dropped**: its destructor runs and its heap memory is freed.
+
+That is all. Everything else (borrowing, lifetimes, smart pointers) builds on these three rules.
+
+## Moves
+
+Assigning a heap-owning value to another variable, passing it to a function or returning it **moves** it. Only the small stack handle is copied, bit by bit; the heap data stays where it is. What changes is *who is responsible for freeing it*.
+
+<OwnershipVisualizer />
+
+The key insight is step 2. After `let s2 = s1`, both handles would point to the same buffer. If both were valid, both would free it at the end of `main`: a double free. Rust prevents that by declaring `s1` dead from that point on.
+
+<Playground title="Use after move" expectError>
+```rust
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = s1;
+    println!("{s1}, world");
+    println!("{s2}");
+}
+```
+</Playground>
+
+The error, `borrow of moved value: s1`, points at both the move and the later use. It even suggests `.clone()`. This check is purely static: there is no "moved" flag tested at runtime and no null left behind.
+
+<Compare left="Python">
+```python
+a = ["hello"]
+b = a            # two names, one list
+b.append("world")
+print(a)         # ['hello', 'world']: aliasing
+# the GC frees the list when no name refers to it
+```
+
+```rust
+let a = vec!["hello"];
+let mut b = a;   // ownership moves to b
+b.push("world");
+// println!("{a:?}"); // error: a was moved
+// the Vec is freed when b goes out of scope
+```
+</Compare>
+
+In garbage-collected languages, assignment creates an **alias**: two names for the same object, either of which can modify it. Rust's move semantics mean there is never silent aliasing of owned data. When you do want two names to see the same data, you will say so explicitly with a borrow (next lesson) or a shared pointer like `Rc` (intermediate track).
+
+<Callout type="compare" from="C++">
+A Rust move is like `std::move` into a `unique_ptr`, with two differences. It is the **default**, not an opt-in. And the source is not left in a "valid but unspecified" moved-from state that you can still touch: the compiler forbids any further use, so there is no moved-from state to reason about at all.
+</Callout>
+
+## Copy and Clone
+
+Moving an `i32` would be silly: there is nothing on the heap to protect. Types that are just plain bits implement the `Copy` trait, and for them assignment duplicates the value and keeps the original usable.
+
+`Copy` types include all integers and floats, `bool`, `char`, shared references `&T`, and tuples or arrays whose elements are all `Copy`. A type that owns a resource (`String`, `Vec`, `Box`, a file handle) can never be `Copy`.
+
+For everything else there is `Clone`: an explicit `.clone()` call that may allocate and copy as much as needed.
+
+<Playground title="Copy vs Clone">
+```rust
+#[derive(Debug, Clone, Copy)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Debug, Clone)]
+struct User {
+    name: String, // owns heap data: cannot be Copy
+    age: u32,
+}
+
+fn main() {
+    let p1 = Point { x: 1, y: 2 };
+    let p2 = p1;              // bitwise copy, p1 still valid
+    println!("{p1:?} {p2:?} x+y={}", p1.x + p1.y);
+
+    let u1 = User { name: String::from("Ada"), age: 36 };
+    let mut u2 = u1.clone();  // deep copy: a new heap buffer for the name
+    u2.name.push_str(" Lovelace");
+    u2.age += 1;
+    println!("{u1:?}\n{u2:?}");
+}
+```
+</Playground>
+
+Try removing `Clone, Copy` from the `Point` derive: `p1` is moved into `p2`, and printing `p1` fails. Then try adding `Copy` to `User`: the compiler refuses, because `String` is not `Copy`.
+
+<Callout type="tip">
+Seeing `.clone()` in a code review is a useful signal: it marks exactly where data is duplicated. Cloning is fine in non-hot code and while learning, but frequent clones to "make the borrow checker happy" usually mean a borrow would serve better.
+</Callout>
+
+## Ownership across functions
+
+Function parameters are just bindings, so passing a value **moves** it into the function, and returning a value **moves** it out to the caller.
+
+<Playground title="Moving in and out of functions">
+```rust
+fn take(s: String) {
+    println!("took {s}");
+} // s dropped here: the buffer is freed
+
+fn make_greeting(name: &str) -> String {
+    let mut s = String::from("Hello, ");
+    s.push_str(name);
+    s // ownership moves out to the caller
+}
+
+fn add_suffix(mut s: String) -> String {
+    s.push('!');
+    s
+}
+
+fn main() {
+    let a = make_greeting("Rust");
+    let a = add_suffix(a);   // move in, get it back
+    take(a);                 // move in for good
+    // println!("{a}");      // error: a was moved into take()
+
+    let n = 5;
+    let m = n;               // i32 is Copy
+    println!("{n} {m}");
+}
+```
+</Playground>
+
+Passing ownership back and forth works, but it gets tedious: imagine every function that just reads a string having to return it. That is precisely the problem references solve, in the next lesson. Notice also `make_greeting(name: &str)`: it borrows its input and returns a new owned `String`, a very common signature shape.
+
+## Drop: deterministic cleanup
+
+When an owner goes out of scope, Rust calls `drop` on the value. For `String` and `Vec`, that frees the heap buffer. For a `File`, it closes the descriptor. For a `MutexGuard`, it unlocks the mutex. This is **RAII**, as in C++, but enforced by the ownership rules so that each resource is released exactly once.
+
+<Playground title="Drop order">
+```rust
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+fn main() {
+    let _a = Noisy("a");
+    let _b = Noisy("b");
+    {
+        let _inner = Noisy("inner");
+        println!("leaving inner scope");
+    }
+    let c = Noisy("c");
+    drop(c); // std::mem::drop: take ownership and let it go now
+    println!("end of main");
+}
+```
+</Playground>
+
+Locals are dropped in **reverse order of declaration**, so later values, which may depend on earlier ones, go first. Calling `drop(c)` is not special syntax: `std::mem::drop` is an empty function that takes ownership, so the value is dropped when that function returns.
+
+<Callout type="runtime">
+The compiler inserts drop calls during MIR construction, at every point where an owned value goes out of scope, including early `return`s, `?` and panics that unwind. When a value is only *conditionally* moved (for example inside an `if`), the compiler adds a hidden boolean **drop flag** on the stack and checks it at the end of the scope. That is the entire runtime cost of ownership: usually nothing, occasionally one byte and a branch.
+</Callout>
+
+## Key takeaways
+
+- Every value has exactly one owner; when the owner goes out of scope the value is dropped.
+- Assignment, argument passing and returning **move** owning values: only the stack handle is copied and the source becomes unusable.
+- `Copy` types (plain bits like integers and `&T`) are duplicated instead of moved; everything else must be cloned explicitly with `.clone()`.
+- Use-after-move is a compile error, not a runtime check, and there is no moved-from state.
+- Drop is deterministic RAII: resources are released in reverse declaration order, exactly once.

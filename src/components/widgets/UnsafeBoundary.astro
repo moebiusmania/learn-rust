@@ -1,0 +1,165 @@
+---
+/**
+ * Nested-layer diagram (safe → unsafe → raw memory/FFI). Selecting an
+ * operation moves a marker to the layer it belongs to and shows the
+ * invariant the programmer has to uphold.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import { getLang, widgetStrings } from '@/i18n';
+import { highlightRust } from '@/scripts/rust-highlight';
+
+type Layer = 'safe' | 'unsafe' | 'raw';
+interface Strings {
+  title: string; subtitle: string; operations: string;
+  layers: Record<Layer, string>;
+  safe: string; needsUnsafe: string; invariant: string; stillChecked: string;
+  ops: Record<string, { label: string; text: string }>;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'unsafe-boundary');
+
+// Structure (language-independent): which layer each operation lives in.
+const ops: { id: string; code: string; layer: Layer }[] = [
+  { id: 'index', code: 'let x = v[i];', layer: 'safe' },
+  { id: 'rawCreate', code: 'let p = &raw const x;', layer: 'safe' },
+  { id: 'intToPtr', code: 'let p = 0x1234 as *const u8;', layer: 'safe' },
+  { id: 'forget', code: 'std::mem::forget(v);', layer: 'safe' },
+  { id: 'deref', code: 'let y = unsafe { *p };', layer: 'raw' },
+  { id: 'unsafeFn', code: 'unsafe { v.get_unchecked(i) }', layer: 'unsafe' },
+  { id: 'staticMut', code: 'unsafe { COUNTER += 1 }', layer: 'unsafe' },
+  { id: 'union', code: 'let b = unsafe { bits.f };', layer: 'raw' },
+  { id: 'unsafeImpl', code: 'unsafe impl Send for Handle {}', layer: 'unsafe' },
+  { id: 'ffi', code: 'unsafe { strlen(ptr) }', layer: 'raw' },
+];
+---
+<WidgetFrame tag="unsafe-boundary" title={s.title} subtitle={s.subtitle} icon="shield">
+  <div class="ub">
+    <div class="ub-ops" role="listbox" aria-label={s.operations}>
+      {
+        ops.map((op, i) => (
+          <button type="button" role="option" class="ub-op" data-op={op.id} data-layer={op.layer} aria-selected={i === 0 ? 'true' : 'false'}>
+            <span class:list={['ub-flag', op.layer === 'safe' ? 'is-safe' : 'is-unsafe']} aria-hidden="true" />
+            {s.ops[op.id]?.label}
+          </button>
+        ))
+      }
+    </div>
+
+    <div class="ub-right">
+      <svg class="ub-diagram" viewBox="0 0 360 230" aria-hidden="true" data-layer="safe">
+        <rect class="layer layer-safe" x="2" y="2" width="356" height="226" rx="18" />
+        <rect class="layer layer-unsafe" x="30" y="56" width="300" height="160" rx="14" />
+        <rect class="layer layer-raw" x="60" y="112" width="240" height="92" rx="10" />
+        <text x="20" y="32" class="layer-label">{s.layers.safe}</text>
+        <text x="46" y="84" class="layer-label">{s.layers.unsafe}</text>
+        <text x="76" y="138" class="layer-label">{s.layers.raw}</text>
+        <g class="raw-bytes">
+          {Array.from({ length: 10 }, (_, i) => <rect x={84 + i * 20} y="156" width="16" height="16" rx="3" style={`--i:${i}`} />)}
+        </g>
+        <g class="marker">
+          <circle r="16" class="marker-halo" />
+          <circle r="8" class="marker-dot" />
+        </g>
+      </svg>
+
+      {
+        ops.map((op, i) => (
+          <div class="ub-detail" data-detail={op.id} hidden={i !== 0}>
+            <span class:list={['ub-verdict', op.layer === 'safe' ? 'is-safe' : 'is-unsafe']}>
+              {op.layer === 'safe' ? s.safe : s.needsUnsafe}
+            </span>
+            <pre class="ub-code"><code set:html={highlightRust(op.code)} /></pre>
+            <p><strong>{s.invariant}:</strong> <span set:html={s.ops[op.id]?.text} /></p>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+  <p class="widget-caption">{s.stillChecked}</p>
+</WidgetFrame>
+
+<script>
+  class UnsafeBoundary extends HTMLElement {
+    connectedCallback() {
+      const buttons = [...this.querySelectorAll<HTMLButtonElement>('.ub-op')];
+      const select = (b: HTMLButtonElement, focus = false) => {
+        buttons.forEach((x) => {
+          x.setAttribute('aria-selected', String(x === b));
+          x.tabIndex = x === b ? 0 : -1;
+        });
+        if (focus) b.focus();
+        this.querySelector('.ub-diagram')!.setAttribute('data-layer', b.dataset.layer!);
+        this.querySelectorAll<HTMLElement>('[data-detail]').forEach((d) => (d.hidden = d.dataset.detail !== b.dataset.op));
+      };
+      buttons.forEach((b, i) => {
+        b.tabIndex = i === 0 ? 0 : -1;
+        b.addEventListener('click', () => select(b));
+        b.addEventListener('keydown', (e) => {
+          const k = buttons.indexOf(b);
+          if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); select(buttons[(k + 1) % buttons.length]!, true); }
+          if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); select(buttons[(k - 1 + buttons.length) % buttons.length]!, true); }
+        });
+      });
+    }
+  }
+  customElements.define('unsafe-boundary', UnsafeBoundary);
+</script>
+
+<style>
+  unsafe-boundary { display: block; }
+  .ub { display: grid; gap: var(--space-4); grid-template-columns: minmax(0, 1fr); }
+  @container widget (width >= 40rem) { .ub { grid-template-columns: 15rem minmax(0, 1fr); } }
+
+  .ub-ops { display: grid; gap: 3px; align-content: start; }
+  .ub-op {
+    display: flex; align-items: center; gap: var(--space-2); text-align: start;
+    padding: 0.45rem 0.7rem; border-radius: var(--radius-s); border: 1px solid transparent;
+    background: transparent; font-size: var(--step--1); color: var(--text-muted);
+    transition: background-color var(--dur), color var(--dur), border-color var(--dur);
+    &:hover { background: var(--surface-2); color: var(--text); }
+    &[aria-selected='true'] { background: var(--accent-soft); border-color: color-mix(in oklch, var(--accent) 40%, transparent); color: var(--text); font-weight: 600; }
+  }
+  .ub-flag { flex: none; inline-size: 8px; block-size: 8px; border-radius: 50%; }
+  .ub-flag.is-safe { background: var(--ok); }
+  .ub-flag.is-unsafe { background: var(--danger); }
+
+  .ub-right { display: grid; gap: var(--space-3); align-content: start; }
+  .ub-diagram { inline-size: 100%; max-inline-size: 30rem; block-size: auto; justify-self: center; font-family: var(--font-sans); }
+  .layer { transition: fill 400ms, stroke 400ms; stroke-width: 1.5; }
+  .layer-safe { fill: color-mix(in oklch, var(--ok) 7%, var(--surface)); stroke: color-mix(in oklch, var(--ok) 40%, var(--border)); }
+  .layer-unsafe { fill: color-mix(in oklch, var(--warn) 9%, var(--surface)); stroke: color-mix(in oklch, var(--warn) 50%, var(--border)); stroke-dasharray: 6 4; }
+  .layer-raw { fill: color-mix(in oklch, var(--danger) 9%, var(--surface)); stroke: color-mix(in oklch, var(--danger) 45%, var(--border)); }
+  .layer-label { font-size: 11.5px; font-weight: 650; fill: var(--text-muted); }
+  .raw-bytes rect { fill: color-mix(in oklch, var(--danger) 18%, var(--surface)); stroke: color-mix(in oklch, var(--danger) 35%, transparent); animation: flicker 3s ease-in-out infinite; animation-delay: calc(var(--i) * 180ms); }
+  @keyframes flicker { 50% { opacity: 0.45; } }
+
+  .ub-diagram[data-layer='safe'] .layer-safe { stroke: var(--ok); stroke-width: 2.5; }
+  .ub-diagram[data-layer='unsafe'] .layer-unsafe { stroke: var(--warn); stroke-width: 2.5; }
+  .ub-diagram[data-layer='raw'] .layer-raw { stroke: var(--danger); stroke-width: 2.5; }
+
+  .marker { transition: transform 650ms var(--ease-spring); transform: translate(320px, 28px); }
+  .ub-diagram[data-layer='unsafe'] .marker { transform: translate(300px, 80px); }
+  .ub-diagram[data-layer='raw'] .marker { transform: translate(270px, 134px); }
+  .marker-dot { fill: var(--ok); transition: fill 400ms; }
+  .marker-halo { fill: var(--ok); opacity: 0.25; transform-box: fill-box; transform-origin: center; animation: halo 1.8s ease-in-out infinite; transition: fill 400ms; }
+  .ub-diagram[data-layer='unsafe'] :is(.marker-dot, .marker-halo) { fill: var(--warn); }
+  .ub-diagram[data-layer='raw'] :is(.marker-dot, .marker-halo) { fill: var(--danger); }
+  @keyframes halo { 50% { scale: 1.35; opacity: 0.1; } }
+
+  .ub-detail {
+    display: grid; gap: var(--space-2); font-size: var(--step--1);
+    animation: fade-up 350ms var(--ease-out);
+    & p { margin: 0; color: var(--text-muted); }
+    & strong { color: var(--text); }
+    &[hidden] { display: none; }
+  }
+  .ub-verdict {
+    justify-self: start; padding: 0.15rem 0.6rem; border-radius: var(--radius-full);
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    &.is-safe { background: color-mix(in oklch, var(--ok) 16%, transparent); color: var(--ok); }
+    &.is-unsafe { background: color-mix(in oklch, var(--danger) 14%, transparent); color: var(--danger); }
+  }
+  .ub-code {
+    margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-s);
+    background: var(--code-bg); border: 1px solid var(--code-border); font-size: 0.82rem; overflow-x: auto;
+  }
+</style>

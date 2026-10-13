@@ -1,0 +1,14 @@
+{
+  "title": "Basic",
+  "tagline": "The Rust mental model",
+  "summary": "Toolchain, types, ownership, borrowing, enums and error handling: the ideas you need before writing any real Rust.",
+  "intro": "Rust looks familiar at first glance: functions, structs, loops, generics. The real difference is that the compiler tracks who owns every value and for how long. This track builds that mental model, step by step, contrasting it with garbage-collected and manually managed languages.",
+  "concepts": [
+    { "title": "Compiled ahead of time", "text": "rustc produces a native binary through LLVM. There is no VM and no JIT: what you ship is machine code plus a statically linked standard library." },
+    { "title": "No garbage collector", "text": "Every value has exactly one owner. When the owner goes out of scope the value is dropped, deterministically, at a point you can read in the source code." },
+    { "title": "Move by default", "text": "Assignment and argument passing move heap-owning values instead of copying or sharing them. Cheap stack-only types opt into Copy." },
+    { "title": "Aliasing XOR mutability", "text": "At any time you can have many shared references (&T) or exactly one mutable reference (&mut T), never both. This single rule rules out data races and iterator invalidation." },
+    { "title": "Expressions everywhere", "text": "if, match and blocks are expressions that produce values. Combined with enums, this replaces null, exceptions and many design patterns." },
+    { "title": "Errors in the type system", "text": "Fallible functions return Result<T, E>. The ? operator propagates errors explicitly; panics are reserved for bugs." }
+  ]
+}

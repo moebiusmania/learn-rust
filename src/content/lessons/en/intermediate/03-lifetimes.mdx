@@ -1,0 +1,158 @@
+---
+title: Lifetimes
+description: What lifetime annotations actually express, when you need to write them, the elision rules that usually spare you, and what 'static really means.
+duration: 22
+tags: [lifetimes, elision, "'static", E0597]
+---
+
+Lifetimes are the part of Rust with the worst reputation and the simplest core idea. Every reference points to a value that lives somewhere; the reference must not be used after that value is gone. In garbage-collected languages the runtime keeps the value alive as long as anyone points to it. In C and C++ the programmer is trusted to get it right. Rust checks it at compile time, and **lifetimes** are the names it uses for the regions of code in which a reference is valid.
+
+## Constraints, not durations
+
+The most important thing to understand is what a lifetime annotation does *not* do: it never changes how long a value lives. Values are dropped at the end of their owner's scope, period. An annotation such as `'a` only **describes a relationship** between references, so that the compiler can check every caller against it.
+
+Most of the time the compiler infers everything inside a function body. You have already been relying on that: each borrow got a lifetime, the borrow checker verified it, and you never wrote a single `'a`. The visualizer shows what it computes: how long each value lives, and how long each borrow needs to stay valid.
+
+<LifetimeVisualizer />
+
+The second preset is the classic **dangling reference**. In C this compiles and reads freed stack memory; in a GC language `x` would simply stay alive. Rust rejects it with `E0597: x does not live long enough`.
+
+## When you must annotate: function signatures
+
+Inside a body, inference works because the compiler sees everything. A function **signature** is a contract checked independently from its callers, so when a function returns a reference, the compiler must know which input it may borrow from.
+
+<Playground title="Missing lifetime" expectError>
+```rust
+// Which input does the returned reference borrow from? The compiler can't tell.
+fn longest(a: &str, b: &str) -> &str {
+    if a.len() >= b.len() { a } else { b }
+}
+
+fn main() {
+    println!("{}", longest("borrow", "checker"));
+}
+```
+</Playground>
+
+The fix is to state the relationship: "the result borrows from `a` *or* `b`, so it is valid only while both are".
+
+```rust
+fn longest<'a>(a: &'a str, b: &'a str) -> &'a str
+```
+
+Read `'a` as a generic parameter, like `T`, but for regions of code. At each call site the compiler picks the largest region that fits inside both arguments' borrows and requires the result not to be used beyond it. The third preset of the visualizer shows exactly this failing when one of the strings dies too early.
+
+<Callout type="compare" from="C / C++">
+A C++ function returning `const std::string&` makes the same promise implicitly, and nothing checks it: returning a reference to a local or to a temporary is a classic source of crashes that sanitizers catch only at runtime, if a test happens to exercise the path. Rust makes the promise part of the type, so callers cannot break it and implementations cannot lie about it.
+</Callout>
+
+## Elision: why you rarely write them
+
+If every function with references needed annotations, Rust would be unbearable. The compiler applies three **elision rules** to fill them in for you; only when the rules leave the output ambiguous do you have to write them.
+
+1. Each reference parameter gets its own distinct lifetime: `fn f(a: &str, b: &str)` becomes `fn f<'a, 'b>(a: &'a str, b: &'b str)`.
+2. If there is **exactly one** input lifetime, it is assigned to all output references: `fn first(s: &str) -> &str` just works.
+3. If one of the parameters is `&self` or `&mut self`, its lifetime is assigned to all outputs. Methods returning references into their own struct need no annotations.
+
+`longest` fails because it has two input lifetimes and no `self`: none of the rules applies to its output.
+
+## Structs that hold references
+
+A struct can store references too, but it must declare a lifetime parameter, which says: "an instance of this struct cannot outlive the data it borrows".
+
+<Playground title="Annotated functions and borrowing structs">
+```rust
+// The result is valid as long as BOTH inputs are.
+fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+    if a.len() >= b.len() { a } else { b }
+}
+
+// A struct that borrows: it cannot outlive the text it points into.
+struct Excerpt<'a> {
+    part: &'a str,
+}
+
+impl<'a> Excerpt<'a> {
+    // Elision rule 3: the output borrows from &self.
+    fn first_word(&self) -> &str {
+        self.part.split_whitespace().next().unwrap_or("")
+    }
+}
+
+fn main() {
+    let novel = String::from("Call me Ishmael. Some years ago...");
+    let first_sentence = novel.split('.').next().unwrap();
+    let ex = Excerpt { part: first_sentence };
+    println!("excerpt: {:?}, first word: {:?}", ex.part, ex.first_word());
+
+    let a = String::from("lifetimes");
+    {
+        let b = String::from("scopes");
+        // 'a is inferred as the shorter of the two scopes: fine, used right here.
+        println!("longest: {}", longest(&a, &b));
+    }
+}
+```
+</Playground>
+
+Borrowing structs are great for short-lived views: parsers that point into an input buffer, iterators over a collection, zero-copy deserialization. For long-lived data, prefer owned fields (`String` instead of `&str`). A common beginner mistake is to sprinkle lifetimes over every struct to avoid cloning; it spreads the annotations to every type that contains them and rarely pays off.
+
+<Callout type="tip" title="When the borrow checker pushes back">
+If you are fighting lifetimes in a struct, ask whether it should own its data. Cloning a short string once is cheap; restructuring an entire module around a borrowed field is not. Owned data, indices into a `Vec`, or `Rc`/`Arc` (coming in a later lesson) are all legitimate ways out.
+</Callout>
+
+## 'static and the T: 'static misconception
+
+`'static` is the one named lifetime built into the language: the region that lasts for the whole program. String literals have type `&'static str` because their bytes are embedded in the binary.
+
+The bound `T: 'static`, which you will meet on `std::thread::spawn` and in async runtimes, is commonly misread. It does **not** mean "the value lives forever". It means "`T` does not contain any borrowed reference shorter than `'static`". Every owned type satisfies it: `String`, `Vec<i32>`, your own structs without reference fields.
+
+<Playground title="'static as a bound">
+```rust
+use std::fmt::Debug;
+
+// T: 'static means "T owns everything it holds (or only borrows 'static data)".
+// It does NOT mean the value lives forever.
+fn keep_for_later<T: Debug + 'static>(value: T) -> Box<dyn Debug> {
+    Box::new(value)
+}
+
+fn main() {
+    let greeting: &'static str = "string literals are baked into the binary";
+    println!("{greeting}");
+
+    let owned = String::from("created at runtime");
+    let kept = keep_for_later(owned);   // OK: String owns its data
+    println!("{kept:?}");
+
+    let numbers = vec![1, 2, 3];
+    let kept2 = keep_for_later(numbers.clone());
+    println!("{kept2:?}");
+    // keep_for_later(&numbers);  // error: `numbers` does not live long enough
+}
+```
+</Playground>
+
+Uncomment the last line to see the difference: a `&Vec<i32>` pointing into a local is not `'static`, while the owned clone is. The string created at runtime satisfies the bound even though it will be dropped long before the program ends.
+
+<Callout type="runtime">
+Lifetimes exist only in the compiler. They are checked on MIR by the borrow checker and then erased: they generate no code, no runtime metadata, no reference counts. Two functions that differ only in lifetime annotations compile to identical machine code. That is the whole point: memory safety for references with no runtime cost.
+</Callout>
+
+## Reading common errors
+
+| Error | What it means | Usual fix |
+| --- | --- | --- |
+| `E0106 missing lifetime specifier` | a signature returns a reference and elision cannot decide its source | add `'a` linking output to the right input(s) |
+| `E0597 does not live long enough` | a value is dropped while a borrow of it is still used | move the value to an outer scope, or return owned data |
+| `E0515 cannot return reference to local variable` | the function returns a borrow of something it created | return the owned value (`String`, `Vec`) instead |
+| `E0499 / E0502` | conflicting mutable and shared borrows overlap | shorten one borrow, or restructure the access |
+
+## Key takeaways
+
+- A lifetime names the region in which a reference is valid; annotations describe relationships and never extend how long values live.
+- Inside function bodies everything is inferred; signatures need annotations only when elision cannot decide where a returned reference comes from.
+- The three elision rules: each input gets its own lifetime; a single input lifetime flows to the outputs; `&self` flows to the outputs.
+- Structs holding references need a lifetime parameter and cannot outlive what they borrow; prefer owned fields for long-lived data.
+- `T: 'static` means "contains no short-lived borrows", not "lives forever": owned values qualify.
+- Lifetimes are erased after checking: zero runtime cost.

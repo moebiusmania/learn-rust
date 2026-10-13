@@ -1,0 +1,115 @@
+---
+/**
+ * Animated hero illustration: a String moving from `s1` to `s2`.
+ * The heap buffer stays put, only ownership (the pointer) changes hands.
+ * Pure SVG + CSS keyframes, loops every 8 s.
+ */
+const bytes = ['h', 'e', 'l', 'l', 'o'];
+---
+<figure class="hero-art" aria-hidden="true">
+  <svg viewBox="0 0 520 380">
+    <defs>
+      <pattern id="dots" width="18" height="18" patternUnits="userSpaceOnUse">
+        <circle cx="1.5" cy="1.5" r="1.2" fill="var(--border-strong)" />
+      </pattern>
+      <marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 10 5 0 10z" fill="currentColor" />
+      </marker>
+      <linearGradient id="heap-g" x1="0" x2="1">
+        <stop offset="0" stop-color="var(--heap)" stop-opacity="0.18" />
+        <stop offset="1" stop-color="var(--heap)" stop-opacity="0.06" />
+      </linearGradient>
+    </defs>
+    <rect width="520" height="380" rx="24" fill="url(#dots)" opacity="0.6" />
+
+    <!-- stack -->
+    <text x="40" y="52" class="label">STACK</text>
+    <g class="frame s1">
+      <rect x="40" y="70" width="190" height="104" rx="12" />
+      <text x="56" y="96" class="var">s1</text>
+      <text x="56" y="122" class="field">ptr</text><text x="210" y="122" class="val" text-anchor="end">0x7f…a0</text>
+      <text x="56" y="142" class="field">len</text><text x="210" y="142" class="val" text-anchor="end">5</text>
+      <text x="56" y="162" class="field">cap</text><text x="210" y="162" class="val" text-anchor="end">5</text>
+      <line x1="40" y1="104" x2="230" y2="104" class="sep" />
+      <g class="moved-badge"><rect x="160" y="80" width="58" height="20" rx="10" /><text x="189" y="94" text-anchor="middle">moved</text></g>
+    </g>
+    <g class="frame s2">
+      <rect x="40" y="200" width="190" height="104" rx="12" />
+      <text x="56" y="226" class="var">s2</text>
+      <text x="56" y="252" class="field">ptr</text><text x="210" y="252" class="val" text-anchor="end">0x7f…a0</text>
+      <text x="56" y="272" class="field">len</text><text x="210" y="272" class="val" text-anchor="end">5</text>
+      <text x="56" y="292" class="field">cap</text><text x="210" y="292" class="val" text-anchor="end">5</text>
+      <line x1="40" y1="234" x2="230" y2="234" class="sep" />
+    </g>
+
+    <!-- heap -->
+    <text x="300" y="52" class="label heap-label">HEAP</text>
+    <g class="heap">
+      <rect x="300" y="150" width="180" height="56" rx="12" fill="url(#heap-g)" stroke="var(--heap)" stroke-opacity="0.5" />
+      {bytes.map((b, i) => (
+        <g style={`--i:${i}`} class="byte">
+          <rect x={312 + i * 32} y="162" width="28" height="32" rx="6" />
+          <text x={326 + i * 32} y="183" text-anchor="middle">{b}</text>
+        </g>
+      ))}
+    </g>
+
+    <!-- ownership arrows -->
+    <path class="arrow a1" d="M212 118 C 260 118, 262 150, 304 168" marker-end="url(#arrowhead)" />
+    <path class="arrow a2" d="M212 248 C 262 248, 262 205, 304 190" marker-end="url(#arrowhead)" />
+
+    <!-- code card -->
+    <g class="code-card">
+      <rect x="250" y="250" width="240" height="96" rx="14" />
+      <text x="268" y="280"><tspan class="k">let</tspan> s1 = <tspan class="t">String</tspan>::from(<tspan class="s">"hello"</tspan>);</text>
+      <text x="268" y="306" class="line2"><tspan class="k">let</tspan> s2 = s1; <tspan class="c">// move</tspan></text>
+      <text x="268" y="332" class="line3"><tspan class="c">// s1 is no longer valid</tspan></text>
+    </g>
+  </svg>
+</figure>
+
+<style>
+  .hero-art { margin: 0; color: var(--owner); }
+  svg { inline-size: 100%; block-size: auto; overflow: visible; font-family: var(--font-mono); }
+  .label { font: 700 12px var(--font-sans); letter-spacing: 0.16em; fill: var(--stack); }
+  .heap-label { fill: var(--heap); }
+  .frame rect:first-child { fill: var(--surface); stroke: var(--border-strong); filter: drop-shadow(0 6px 14px oklch(0 0 0 / 0.08)); }
+  .sep { stroke: var(--border); }
+  .var { font-size: 15px; font-weight: 700; fill: var(--text); }
+  .field { font-size: 12px; fill: var(--text-muted); }
+  .val { font-size: 12px; fill: var(--text); }
+  .byte rect { fill: var(--surface); stroke: color-mix(in oklch, var(--heap) 50%, transparent); }
+  .byte text { font-size: 14px; font-weight: 600; fill: var(--heap); }
+  .byte { animation: bob 4s ease-in-out infinite; animation-delay: calc(var(--i) * 120ms); }
+  @keyframes bob { 50% { translate: 0 -3px; } }
+
+  .arrow { fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-dasharray: 160; }
+  .a1 { animation: a1 8s var(--ease-out) infinite; }
+  .a2 { animation: a2 8s var(--ease-out) infinite; }
+  @keyframes a1 {
+    0%, 35% { stroke-dashoffset: 0; opacity: 1; }
+    45%, 92% { stroke-dashoffset: 0; opacity: 0; }
+    100% { stroke-dashoffset: 0; opacity: 1; }
+  }
+  @keyframes a2 {
+    0%, 38% { stroke-dashoffset: 160; opacity: 1; }
+    52%, 92% { stroke-dashoffset: 0; opacity: 1; }
+    100% { stroke-dashoffset: 0; opacity: 0; }
+  }
+  .s1 { animation: s1 8s ease infinite; }
+  @keyframes s1 { 0%, 38% { opacity: 1; } 48%, 92% { opacity: 0.45; } 100% { opacity: 1; } }
+  .s2 { animation: s2 8s ease infinite; }
+  @keyframes s2 { 0%, 30% { opacity: 0.25; translate: 0 6px; } 42%, 94% { opacity: 1; translate: 0 0; } 100% { opacity: 0.25; translate: 0 6px; } }
+  .moved-badge { animation: badge 8s ease infinite; opacity: 0; }
+  .moved-badge rect { fill: color-mix(in oklch, var(--danger) 15%, var(--surface)); stroke: var(--danger); stroke-opacity: 0.5; }
+  .moved-badge text { font: 600 11px var(--font-sans); fill: var(--danger); }
+  @keyframes badge { 0%, 45% { opacity: 0; } 52%, 90% { opacity: 1; } 97% { opacity: 0; } }
+
+  .code-card rect { fill: var(--code-bg); stroke: var(--border); filter: drop-shadow(0 10px 24px oklch(0 0 0 / 0.12)); }
+  .code-card text { font-size: 12.5px; fill: var(--text); }
+  .k { fill: var(--tok-kw); } .t { fill: var(--tok-type); } .s { fill: var(--tok-str); } .c { fill: var(--tok-com); font-style: italic; }
+  .line2 { animation: hl 8s ease infinite; }
+  .line3 { animation: line3 8s ease infinite; }
+  @keyframes hl { 0%, 34% { opacity: 0.35; } 40%, 100% { opacity: 1; } }
+  @keyframes line3 { 0%, 46% { opacity: 0; } 54%, 92% { opacity: 1; } 100% { opacity: 0; } }
+</style>

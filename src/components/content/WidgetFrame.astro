@@ -1,0 +1,31 @@
+---
+/**
+ * Shared chrome for every interactive widget: icon, title, subtitle, body.
+ * Widgets render <WidgetFrame …><div class="widget-body">…</div></WidgetFrame>
+ * or rely on the default body wrapper via `body` (default true).
+ */
+import Icon from '@/components/Icon.astro';
+
+interface Props {
+  title: string;
+  subtitle?: string;
+  icon?: Parameters<typeof Icon>[0]['name'];
+  /** Custom element tag that hosts the widget logic, e.g. "ownership-visualizer". */
+  tag?: string;
+  body?: boolean;
+  [key: `data-${string}`]: string | undefined;
+}
+const { title, subtitle, icon = 'zap', tag = 'div', body = true, ...rest } = Astro.props;
+const Tag = tag as any;
+---
+<Tag class="widget" {...rest}>
+  <div class="widget-head">
+    <span class="widget-icon"><Icon name={icon} /></span>
+    <div>
+      <div class="widget-title">{title}</div>
+      {subtitle && <div class="widget-subtitle">{subtitle}</div>}
+    </div>
+    <slot name="head-extra" />
+  </div>
+  {body ? <div class="widget-body"><slot /></div> : <slot />}
+</Tag>

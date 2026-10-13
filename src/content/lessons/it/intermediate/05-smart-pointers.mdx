@@ -1,0 +1,240 @@
+---
+title: Smart pointer e mutabilità interna
+description: Box, Rc, Weak, Cell e RefCell, i tipi di libreria che allentano l'ownership singola in modo controllato e visibile.
+duration: 25
+tags: [Box, Rc, RefCell, Weak, Drop]
+---
+
+Ownership singola e borrowing coprono la maggior parte dei programmi, ma non tutti. Un albero i cui nodi puntano al padre, una cache condivisa da più componenti, un valore la cui dimensione non è nota in compilazione: in questi casi serve qualcosa in più. Rust non risolve il problema nel linguaggio, lo risolve con gli **smart pointer**: normali struct della libreria standard che possiedono un valore, implementano `Deref` per comportarsi come riferimenti e implementano `Drop` per fare pulizia.
+
+La proprietà importante è che ognuno rende *esplicito* il proprio compromesso. Quando in una firma vedi `Rc<RefCell<T>>`, sai che sono in gioco un conteggio dei riferimenti e un controllo dei borrow a runtime. Niente resta nascosto dietro un garbage collector.
+
+## `Box<T>`: un valore sullo heap, con un solo proprietario
+
+`Box<T>` è lo smart pointer più semplice: alloca `T` sullo heap e ne conserva il puntatore. Le regole di ownership non cambiano: il box ha un solo proprietario e, quando questo esce dallo scope, il box libera l'allocazione. Lo usi in tre situazioni:
+
+1. **Tipi ricorsivi.** Il compilatore deve conoscere la dimensione di ogni tipo. `enum List { Cons(i32, List), Nil }` sarebbe infinitamente grande; `Box<List>` ha la dimensione di un puntatore.
+2. **Trait object.** `Box<dyn Shape>` permette a un `Vec` di contenere valori di tipi concreti diversi dietro un'unica interfaccia.
+3. **Spostare valori grandi a basso costo** o dare a un valore un indirizzo stabile.
+
+<Playground title="Box per ricorsione e trait object">
+```rust
+// Un tipo ricorsivo ha bisogno di indirezione: Box gli dà una dimensione nota.
+#[derive(Debug)]
+enum List {
+    Cons(i32, Box<List>),
+    Nil,
+}
+use List::{Cons, Nil};
+
+trait Shape {
+    fn area(&self) -> f64;
+}
+struct Circle(f64);
+struct Square(f64);
+impl Shape for Circle { fn area(&self) -> f64 { 3.14159 * self.0 * self.0 } }
+impl Shape for Square { fn area(&self) -> f64 { self.0 * self.0 } }
+
+fn sum(list: &List) -> i32 {
+    match list {
+        Cons(value, rest) => value + sum(rest),
+        Nil => 0,
+    }
+}
+
+fn main() {
+    let list = Cons(1, Box::new(Cons(2, Box::new(Cons(3, Box::new(Nil))))));
+    println!("{list:?} ha somma {}", sum(&list));
+
+    // Collezione eterogenea: ogni elemento è un fat pointer (dati + vtable)
+    let shapes: Vec<Box<dyn Shape>> = vec![Box::new(Circle(1.0)), Box::new(Square(2.0))];
+    let total: f64 = shapes.iter().map(|s| s.area()).sum();
+    println!("area totale = {total:.2}");
+
+    println!("size_of Box<i32>       = {}", size_of::<Box<i32>>());
+    println!("size_of Box<dyn Shape> = {}", size_of::<Box<dyn Shape>>());
+}
+```
+</Playground>
+
+Osserva le dimensioni: `Box<i32>` è un puntatore (8 byte su 64 bit), `Box<dyn Shape>` ne occupa due, perché un trait object porta con sé il puntatore alla vtable accanto a quello ai dati.
+
+<Callout type="compare" from="Java / C#">
+In Java ogni oggetto vive sullo heap e ogni variabile è un riferimento, quindi non ci pensi mai. In Rust i valori vivono sullo stack per default e `Box` è la scelta esplicita di allocare sullo heap. Un `Vec<Point>` memorizza i punti uno dopo l'altro in un unico buffer; una `List<Point>` in Java contiene un array di riferimenti a oggetti allocati separatamente.
+</Callout>
+
+## `Deref` e `Drop`: cosa rende "smart" un puntatore
+
+Due trait danno agli smart pointer la loro ergonomia:
+
+```rust
+use std::ops::Deref;
+
+struct Wrapper<T>(T);
+
+impl<T> Deref for Wrapper<T> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.0 }
+}
+
+impl<T> Drop for Wrapper<T> {
+    fn drop(&mut self) { println!("pulizia"); }
+}
+```
+
+`Deref` abilita la **deref coercion**: un `&Box<String>` o un `&Rc<String>` è accettato ovunque serva un `&str`, perché il compilatore inserisce tutti gli `*` necessari in fase di compilazione. Anche le chiamate di metodo fanno auto-deref, ed è per questo che `boxed_vec.len()` funziona e basta.
+
+`Drop` è il distruttore di Rust. Viene eseguito esattamente una volta, quando il proprietario esce dallo scope, in ordine inverso rispetto alla dichiarazione. Non puoi chiamare `x.drop()` direttamente; usa `std::mem::drop(x)`, che semplicemente prende l'ownership e fa uscire subito il valore dallo scope.
+
+## `Rc<T>`: ownership condivisa tramite conteggio dei riferimenti
+
+A volte un valore ha davvero più proprietari, e nessuno di loro sopravvive con certezza agli altri: i nodi di un grafo, un oggetto di configurazione passato a molti sottosistemi. `Rc<T>` (*reference counted*) mette il valore sullo heap accanto a due contatori. `Rc::clone` **non** fa una copia profonda del valore: copia il puntatore e incrementa il contatore strong. Quando l'ultimo `Rc` viene rilasciato, viene rilasciato anche il valore.
+
+`Rc` concede solo riferimenti condivisi (`&T`), quindi il valore è in sola lettura, e la regola aliasing XOR mutabilità resta intatta. Prova le operazioni qui sotto e osserva entrambi i contatori:
+
+<RcVisualizer />
+
+Il **contatore weak** esiste per spezzare i cicli. Se un padre tiene un `Rc` al figlio e il figlio tiene un `Rc` al padre, i contatori strong non arrivano mai a zero e la memoria resta occupata (in modo sicuro, ma è comunque un leak). La soluzione è rendere una delle due direzioni un `Weak<T>`: non tiene in vita il valore, e `upgrade()` restituisce un `Option<Rc<T>>` che diventa `None` quando il valore non esiste più.
+
+<Playground title="Contatori strong e weak">
+```rust
+use std::rc::{Rc, Weak};
+
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("  drop({})", self.0);
+    }
+}
+
+fn main() {
+    let a = Rc::new(Noisy("config"));
+    println!("strong = {}", Rc::strong_count(&a));
+
+    let b = Rc::clone(&a); // incrementa il contatore, nessuna copia profonda
+    let w: Weak<Noisy> = Rc::downgrade(&a);
+    println!("strong = {}, weak = {}", Rc::strong_count(&a), Rc::weak_count(&a));
+
+    drop(a);
+    println!("dopo drop(a): upgrade riuscito? {}", w.upgrade().is_some());
+
+    drop(b); // ultimo proprietario strong: il valore viene rilasciato qui
+    println!("dopo drop(b): upgrade riuscito? {}", w.upgrade().is_some());
+}
+```
+</Playground>
+
+<Callout type="runtime">
+Un `Rc<T>` è un singolo puntatore a un `RcBox` sullo heap, organizzato come `{ strong: Cell<usize>, weak: Cell<usize>, value: T }`. Clonarlo è un incremento non atomico: pochi cicli di CPU. Il valore viene rilasciato quando `strong` arriva a zero, ma l'allocazione vera e propria viene liberata solo quando arriva a zero anche `weak`, perché i `Weak` ancora in circolazione devono poter leggere i contatori per rispondere a `upgrade()`. `Rc` volutamente **non** è thread-safe: il compilatore rifiuta di inviarlo a un altro thread (non è `Send`), e al suo posto si usa `Arc`.
+</Callout>
+
+## Mutabilità interna: `Cell` e `RefCell`
+
+`Rc` ti dà ownership condivisa, ma solo accesso immutabile. E se più proprietari devono modificare il valore? La regola del borrow checker è statica: deve dimostrare in compilazione che nessun `&mut` coesiste con un altro riferimento. La **mutabilità interna** sposta quella dimostrazione a runtime, per tipi specifici.
+
+- `Cell<T>` funziona per i tipi `Copy`: `get()` copia fuori il valore, `set()` lo sostituisce. Non viene mai concesso un riferimento all'interno della cella, quindi l'aliasing è impossibile e non c'è overhead oltre alla copia.
+- `RefCell<T>` funziona per qualsiasi `T`. `borrow()` restituisce una guardia `Ref<T>`, `borrow_mut()` una guardia `RefMut<T>`. La cella tiene un contatore dei borrow attivi e applica le stesse regole del compilatore (molti lettori oppure uno scrittore), ma **a runtime**. Violarle provoca un panic.
+
+<Playground title="Un errore di borrow a runtime">
+```rust
+use std::cell::RefCell;
+
+fn main() {
+    let log = RefCell::new(Vec::new());
+
+    log.borrow_mut().push("start");          // &mut di breve durata, rilasciato al `;`
+    println!("len = {}", log.borrow().len()); // borrow condiviso, nessun problema
+
+    let first = log.borrow();                 // un borrow condiviso resta attivo...
+    println!("prima voce: {}", first[0]);
+
+    // ...quindi questo borrow mutabile viene rifiutato A RUNTIME: panic con
+    // "RefCell already borrowed". Prova a spostare `drop(first);` qui sopra.
+    log.borrow_mut().push("oops");
+    drop(first);
+}
+```
+</Playground>
+
+Questo codice compila, e poi va in panic. È questo il compromesso: il programma resta sicuro dal punto di vista della memoria, ma un errore che `&mut` avrebbe intercettato in compilazione ora si presenta come un crash in un test. Usa `try_borrow_mut()` quando un conflitto è una possibilità legittima da gestire, e mantieni le guardie di breve durata: prendi in prestito, usa, lascia che la guardia venga rilasciata.
+
+<Callout type="warn">
+`RefCell` non è una via di fuga per quando "il borrow checker dà fastidio". Usala quando l'ownership è davvero condivisa e dinamica, come per gli observer, i nodi di un grafo o i mock nei test. Se basterebbe un semplice parametro `&mut`, quello costa meno, viene verificato prima ed è più chiaro da leggere.
+</Callout>
+
+## Il pattern `Rc<RefCell<T>>`
+
+Combinando i due ottieni qualcosa di simile a un riferimento a oggetto in un linguaggio con garbage collector: molti proprietari, tutti in grado di modificare. Ogni strato fa un solo lavoro: `Rc` risponde a *chi lo possiede*, `RefCell` risponde a *chi può scrivere in questo momento*.
+
+<Playground title="Stato condiviso e mutabile">
+```rust
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Account {
+    owner: String,
+    balance: i64,
+}
+
+fn main() {
+    // Ownership condivisa (Rc) + mutabilità interna (RefCell)
+    let shared = Rc::new(RefCell::new(Account { owner: "ada".into(), balance: 100 }));
+
+    let mobile_app = Rc::clone(&shared);
+    let web_app = Rc::clone(&shared);
+
+    mobile_app.borrow_mut().balance -= 30;
+    web_app.borrow_mut().balance += 5;
+
+    let account = shared.borrow();
+    println!("{} ora ha {}", account.owner, account.balance);
+    println!("proprietari dell'allocazione: {}", Rc::strong_count(&shared));
+}
+```
+</Playground>
+
+<Compare left="TypeScript">
+```ts
+class Account {
+  constructor(public owner: string, public balance: number) {}
+}
+const shared = new Account("ada", 100);
+const mobileApp = shared; // solo un altro riferimento
+const webApp = shared;
+mobileApp.balance -= 30;  // chiunque può modificare, sempre
+webApp.balance += 5;
+```
+
+```rust
+let shared = Rc::new(RefCell::new(
+    Account { owner: "ada".into(), balance: 100 },
+));
+let mobile_app = Rc::clone(&shared); // proprietario contato
+let web_app = Rc::clone(&shared);
+mobile_app.borrow_mut().balance -= 30; // scrittore verificato
+web_app.borrow_mut().balance += 5;
+```
+</Compare>
+
+La versione Rust è più prolissa, ed è proprio questo il punto: la condivisione e la modifica sono visibili in ogni punto d'uso, ed entrambe hanno un costo noto e ridotto.
+
+## Attraversare i thread: `Arc` e `Mutex`
+
+`Rc` e `RefCell` usano interi normali per i loro contatori, quindi sono sicuri solo su un thread. Le controparti thread-safe hanno la stessa forma:
+
+| Singolo thread | Multi-thread | Differenza di costo |
+| --- | --- | --- |
+| `Rc<T>` | `Arc<T>` | incrementi atomici invece che normali |
+| `RefCell<T>` | `Mutex<T>` / `RwLock<T>` | blocca il thread invece di andare in panic |
+| `Cell<T>` | atomici (`AtomicUsize`, …) | istruzioni atomiche dell'hardware |
+
+Quindi `Rc<RefCell<T>>` diventa `Arc<Mutex<T>>` tra thread diversi. Il compilatore impone la scelta tramite i trait `Send` e `Sync`, trattati nella lezione sulla concorrenza del percorso avanzato.
+
+## Punti chiave
+
+- Gli smart pointer sono struct di libreria che possiedono dati, implementano `Deref` per un accesso ergonomico e `Drop` per la pulizia.
+- `Box<T>`: un solo proprietario, allocazione sullo heap. Serve per tipi ricorsivi, trait object e valori grandi.
+- `Rc<T>`: più proprietari tramite un contatore non atomico; accesso in sola lettura. `Weak<T>` spezza i cicli e non tiene in vita il valore.
+- `Cell` e `RefCell` spostano il controllo aliasing XOR mutabilità dalla compilazione al runtime; in `RefCell` una violazione è un panic.
+- `Rc<RefCell<T>>` è il pattern per lo stato condiviso e mutabile su un thread; `Arc<Mutex<T>>` è il suo gemello multi-thread.
+- Ognuno di questi costi è visibile nel tipo, ed è proprio questo che ti permette di evitarli quando non servono.

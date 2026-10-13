@@ -1,0 +1,213 @@
+---
+title: Generici, monomorfizzazione e dyn Trait
+description: Scrivi il codice una volta per molti tipi, poi scegli punto per punto tra specializzazione in compilazione e dispatch a runtime tramite vtable.
+duration: 22
+tags: [generici, trait bound, impl Trait, dyn Trait, vtable]
+---
+
+I generici di Rust somigliano a quelli di Java, C# o TypeScript: parentesi angolari, parametri di tipo, vincoli. Sotto il cofano però funzionano in modo molto diverso. Java cancella i parametri di tipo (erasure) e mette tutto dietro un riferimento; TypeScript cancella del tutto i tipi. Rust fa l'opposto: **specializza** il codice generico per ogni tipo concreto con cui viene usato. Quando invece vuoi polimorfismo a runtime, lo chiedi esplicitamente con `dyn Trait`, e il modello dei costi resta sotto gli occhi.
+
+## Funzioni generiche e trait bound
+
+Un `T` senza vincoli non può fare quasi nulla: il compilatore non ti lascia confrontarlo, stamparlo o copiarlo, perché non può sapere se ogni possibile `T` supporta quelle operazioni. I **trait bound** dichiarano ciò che ti serve, e il compilatore verifica il corpo rispetto ai vincoli *una volta sola*, sulla definizione, non a ogni istanziazione come fanno i template del C++.
+
+<Playground title="generics.rs">
+```rust
+use std::fmt::Display;
+
+// T deve essere confrontabile ed economico da copiare.
+fn largest<T: PartialOrd + Copy>(items: &[T]) -> T {
+    let mut max = items[0];
+    for &item in items {
+        if item > max { max = item; }
+    }
+    max
+}
+
+struct Pair<T> { a: T, b: T }
+
+impl<T> Pair<T> {
+    fn new(a: T, b: T) -> Self { Pair { a, b } }
+}
+
+// Questo metodo esiste solo se T implementa anche Display + PartialOrd.
+impl<T> Pair<T>
+where
+    T: Display + PartialOrd,
+{
+    fn show_max(&self) {
+        let max = if self.a >= self.b { &self.a } else { &self.b };
+        println!("massimo della coppia = {max}");
+    }
+}
+
+fn main() {
+    println!("{}", largest(&[3, 9, 2]));
+    println!("{}", largest(&[1.5, -0.5]));
+    println!("{}", largest(&['r', 'u', 's', 't']));
+
+    Pair::new(10, 20).show_max();
+    Pair::new("ab", "ba").show_max();
+}
+```
+</Playground>
+
+Due dettagli da notare:
+
+- Le clausole `where` sono gli stessi vincoli scritti dopo la firma. Usale quando l'elenco si allunga: si leggono meglio e possono esprimere vincoli anche su cose diverse dai semplici parametri di tipo.
+- **Metodi condizionali**: il secondo blocco `impl` aggiunge `show_max` solo ai tipi `Pair<T>` in cui `T` soddisfa vincoli aggiuntivi. `Pair<Vec<u8>>` resta un tipo valido, semplicemente non ha quel metodo. È così che std dà a `Vec<T>` un metodo `sort` solo quando `T: Ord`.
+
+<Callout type="compare" from="template C++">
+Il C++ controlla il corpo di un template solo quando viene istanziato, producendo i famosi errori lunghissimi nel profondo del codice di libreria. Rust verifica i corpi generici rispetto ai vincoli dichiarati, in anticipo. Se `largest` compila, compila per ogni `T` che soddisfa `PartialOrd + Copy`, e chi passa il tipo sbagliato riceve un errore sul punto di chiamata, con il nome del trait mancante.
+</Callout>
+
+## Monomorfizzazione
+
+In compilazione, ogni uso di `largest` con un nuovo tipo concreto genera una copia nuova della funzione, specializzata per quel tipo: `largest::<i32>`, `largest::<f64>`, `largest::<char>`. Ogni copia viene ottimizzata in modo indipendente, con il confronto messo inline come singola istruzione della CPU. Questo processo si chiama **monomorfizzazione**, ed è il motivo per cui i generici di Rust sono un'astrazione a costo zero: il risultato è esattamente ciò che avresti scritto a mano per ciascun tipo.
+
+Il prezzo da pagare sono il tempo di compilazione e la dimensione del binario. Una funzione generica usata con 30 tipi diventa 30 funzioni. Le codebase grandi e piene di generici a volte riducono il problema scrivendo un sottile wrapper generico che converte l'input e chiama una funzione interna non generica.
+
+## impl Trait: una scorciatoia con una sorpresa
+
+`impl Trait` può comparire in due posizioni, con significati diversi:
+
+- **In posizione di argomento**, `fn notify(n: &impl Notify)` è solo zucchero sintattico per un parametro generico, `fn notify<N: Notify>(n: &N)`. Il tipo lo sceglie *chi chiama*.
+- **In posizione di ritorno**, `fn make() -> impl Notify` significa "un unico tipo concreto che implementa `Notify`, di cui non dico il nome". Il tipo lo sceglie *la funzione*, e chi chiama può usarlo solo attraverso il trait. È essenziale per restituire closure e catene di iteratori, i cui tipi non hanno nome o sono lunghissimi.
+
+Il tipo restituito resta statico: ogni chiamata a `make` restituisce lo stesso tipo concreto, e le chiamate su di esso vengono risolte in compilazione.
+
+## dyn Trait: dispatch dinamico su richiesta
+
+A volte il tipo concreto si conosce solo a runtime: un elenco di plugin, una coda con tipi diversi di notifiche, un handler scelto dalla configurazione. Per questi casi Rust offre i **trait object**: `dyn Trait` dietro un puntatore (`&dyn Trait`, `Box<dyn Trait>`, `Arc<dyn Trait>`).
+
+<Playground title="Dispatch statico e dinamico">
+```rust
+use std::mem::size_of;
+
+trait Notify {
+    fn send(&self) -> String;
+}
+
+struct Email { to: String }
+struct Sms { number: u64 }
+
+impl Notify for Email {
+    fn send(&self) -> String { format!("email a {}", self.to) }
+}
+impl Notify for Sms {
+    fn send(&self) -> String { format!("sms al {}", self.number) }
+}
+
+// Dispatch statico: una copia per ogni tipo concreto.
+fn notify_static(n: &impl Notify) -> String { n.send() }
+
+// Dispatch dinamico: una sola copia, la chiamata passa dalla vtable.
+fn notify_dyn(n: &dyn Notify) -> String { n.send() }
+
+// impl Trait in posizione di ritorno: chi chiama vede un tipo opaco.
+fn make_default() -> impl Notify {
+    Email { to: "ops@example.com".into() }
+}
+
+fn main() {
+    let e = Email { to: "ada@example.com".into() };
+    let s = Sms { number: 5550100 };
+    println!("{}", notify_static(&e));
+    println!("{}", notify_dyn(&s));
+    println!("{}", make_default().send());
+
+    // Una collezione eterogenea richiede dyn: ogni elemento ha un tipo diverso.
+    let queue: Vec<Box<dyn Notify>> = vec![Box::new(e), Box::new(s)];
+    for n in &queue {
+        println!("in coda: {}", n.send());
+    }
+
+    println!("&Email       = {} byte", size_of::<&Email>());
+    println!("&dyn Notify  = {} byte", size_of::<&dyn Notify>());
+    println!("Box<dyn ..>  = {} byte", size_of::<Box<dyn Notify>>());
+}
+```
+</Playground>
+
+Le dimensioni stampate alla fine rivelano il meccanismo. Un riferimento a un tipo concreto è un solo puntatore. Un riferimento a un `dyn Trait` è un **fat pointer**: un puntatore ai dati e uno a una **vtable**, una tabella statica generata dal compilatore per ogni coppia (tipo, trait). Passa da una modalità all'altra e anima una chiamata:
+
+<DispatchVisualizer />
+
+<Callout type="runtime">
+Una vtable contiene dimensione e allineamento del tipo, un puntatore al suo distruttore (`drop_in_place`) e un puntatore a funzione per ogni metodo del trait. Chiamare `n.send()` su un `&dyn Notify` carica il puntatore alla vtable, legge la voce `send` ed esegue una chiamata indiretta. Costa al massimo qualche nanosecondo, ma impedisce l'inlining, quindi l'ottimizzatore non può vedere oltre la chiamata. A differenza di Java o C#, gli oggetti non hanno un header nascosto: il puntatore alla vtable vive nel riferimento, non nel valore, quindi un semplice `Email` resta grande esattamente quanto i suoi campi.
+</Callout>
+
+## Dyn compatibility
+
+Non tutti i trait possono diventare trait object. Dato che il tipo concreto viene cancellato, il compilatore deve poter costruire una vtable con un insieme fisso di puntatori a funzione. Un trait è **dyn compatible** (un tempo si diceva "object safe") quando, in sintesi:
+
+- nessun metodo restituisce `Self` per valore né riceve `Self` come parametro per valore (dietro `dyn` la sua dimensione è sconosciuta);
+- nessun metodo ha parametri di tipo generici propri (servirebbero infinite voci nella vtable);
+- il trait non richiede `Self: Sized`.
+
+I metodi che violano queste regole si possono mantenere ed escludere dalla vtable aggiungendo `where Self: Sized`.
+
+<Playground title="Non dyn compatible" expectError>
+```rust
+trait Duplicate {
+    // Restituisce Self per valore: dietro dyn la dimensione di Self è sconosciuta.
+    fn duplicate(&self) -> Self;
+}
+
+impl Duplicate for String {
+    fn duplicate(&self) -> Self { self.clone() }
+}
+
+fn main() {
+    let items: Vec<Box<dyn Duplicate>> = vec![Box::new(String::from("ciao"))];
+    println!("{}", items.len());
+}
+```
+</Playground>
+
+Per questo lo stesso `Clone` non si può usare come `dyn Clone`. Crate come `dyn-clone` aggirano il problema con un metodo di supporto che restituisce `Box<dyn Trait>`.
+
+## Come scegliere
+
+<Compare left="Java / C#">
+```java
+// Sempre dinamico: le chiamate su interfaccia
+// passano da una tabella virtuale a runtime
+// (il JIT può devirtualizzare i percorsi caldi).
+List<Notifier> all = List.of(
+    new Email("ada"), new Sms(555)
+);
+for (Notifier n : all) n.send();
+```
+
+```rust
+// Scegli tu, punto per punto:
+fn fast(n: &impl Notify) { n.send(); }     // statico
+fn flexible(n: &dyn Notify) { n.send(); }  // dinamico
+
+let all: Vec<Box<dyn Notify>> = vec![
+    Box::new(Email { to: "ada".into() }),
+    Box::new(Sms { number: 555 }),
+];
+```
+</Compare>
+
+Una regola pratica:
+
+| Preferisci generici / `impl Trait` quando | Preferisci `dyn Trait` quando |
+| --- | --- |
+| il tipo è noto in ogni punto di chiamata | l'insieme dei tipi è aperto o scelto a runtime |
+| il codice è critico e beneficia dell'inlining | ti serve una collezione eterogenea |
+| restituisci closure o iteratori | tempo di compilazione o dimensione del binario contano più dei nanosecondi |
+| il trait non è dyn compatible | vuoi nascondere i tipi di implementazione dietro un'API stabile |
+
+La maggior parte del codice Rust parte dai generici e introduce `dyn` ai confini dove serve flessibilità: registri di plugin, tipi di errore (`Box<dyn Error>`), callback memorizzate nelle struct.
+
+## Punti chiave
+
+- I trait bound dichiarano cosa deve supportare un tipo generico; il corpo viene verificato una sola volta rispetto ai vincoli.
+- I generici vengono monomorfizzati: una copia specializzata e completamente ottimizzata per ogni tipo concreto, al prezzo di tempo di compilazione e dimensione del binario.
+- `impl Trait` in posizione di argomento è un parametro generico; in posizione di ritorno è un unico tipo concreto nascosto, scelto dalla funzione.
+- `dyn Trait` usa un fat pointer (dati + vtable) e una chiamata indiretta; gli oggetti non hanno alcun header.
+- Solo i trait dyn compatible possono diventare trait object: niente `Self` per valore, niente metodi generici.
+- Parti dal dispatch statico e passa a `dyn` quando i tipi si conoscono solo a runtime o ti servono collezioni eterogenee.

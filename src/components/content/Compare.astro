@@ -1,0 +1,46 @@
+---
+/**
+ * Side-by-side comparison of two fenced code blocks.
+ *   <Compare left="TypeScript" right="Rust">
+ *   ```ts … ```
+ *   ```rust … ```
+ *   </Compare>
+ */
+interface Props { left: string; right?: string }
+const { left, right = 'Rust' } = Astro.props;
+---
+<div class="compare">
+  <div class="lbl lbl-left">{left}</div>
+  <div class="lbl lbl-right">{right}</div>
+  <slot />
+</div>
+
+<style>
+  .compare {
+    container-type: inline-size;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0 var(--space-3);
+    margin-block: var(--space-6);
+  }
+  .lbl {
+    justify-self: start; margin-block: var(--space-3) calc(-1 * var(--space-1)); position: relative; z-index: 1;
+    padding: 0.15rem 0.7rem; border-radius: var(--radius-s) var(--radius-s) 0 0;
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    background: var(--surface-3); color: var(--text-muted);
+  }
+  .lbl-right { background: var(--accent-soft); color: var(--accent-strong); }
+  .compare :global(pre) { margin: 0; border-start-start-radius: 0; font-size: 0.8rem; }
+  /* narrow: label, code, label, code */
+  .lbl-left { grid-row: 1; }
+  .compare > :global(pre:nth-of-type(1)) { grid-row: 2; }
+  .lbl-right { grid-row: 3; }
+  .compare > :global(pre:nth-of-type(2)) { grid-row: 4; }
+  @container (width >= 40rem) {
+    .compare { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .lbl-left, .lbl-right { grid-row: 1; }
+    .lbl-right { grid-column: 2; }
+    .compare > :global(pre:nth-of-type(1)), .compare > :global(pre:nth-of-type(2)) { grid-row: 2; }
+    .compare > :global(pre:nth-of-type(2)) { grid-column: 2; }
+  }
+</style>

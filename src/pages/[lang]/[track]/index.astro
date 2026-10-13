@@ -1,0 +1,138 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import TrackGlyph from '@/components/TrackGlyph.astro';
+import Icon from '@/components/Icon.astro';
+import { useTranslations } from '@/i18n';
+import { locales, tracks, type Locale, type Track } from '@/i18n/config';
+import { localeUrl } from '@/lib/url';
+import { getLessons, getTrackInfo } from '@/lib/content';
+
+export function getStaticPaths() {
+  return locales.flatMap((lang) => tracks.map((track) => ({ params: { lang, track } })));
+}
+
+const lang = Astro.params.lang as Locale;
+const track = Astro.params.track as Track;
+const { t } = useTranslations(lang);
+const info = await getTrackInfo(lang, track);
+const lessons = await getLessons(lang, track);
+const level = (tracks.indexOf(track) + 1) as 1 | 2 | 3;
+const nextTrack = tracks[tracks.indexOf(track) + 1];
+const nextInfo = nextTrack ? await getTrackInfo(lang, nextTrack) : undefined;
+---
+<BaseLayout lang={lang} title={info.title} description={info.summary} currentTrack={track}>
+  <div class="container">
+    <nav class="crumbs" aria-label="breadcrumb">
+      <a href={localeUrl(lang)}>{t('nav.home')}</a><span class="sep">/</span><span>{info.title}</span>
+    </nav>
+
+    <header class="track-hero">
+      <div>
+        <p class="eyebrow fade-up">{info.tagline}</p>
+        <h1 class="fade-up" style="--i:1">{info.title}</h1>
+        <p class="intro fade-up" style="--i:2">{info.intro}</p>
+      </div>
+      <div class="glyph fade-up" style="--i:2"><TrackGlyph level={level} /></div>
+    </header>
+
+    <section class="block">
+      <h2>{t('track.conceptsTitle')}</h2>
+      <div class="concepts">
+        {
+          info.concepts.map((c, i) => (
+            <article class="concept reveal" style={`--n:'${String(i + 1).padStart(2, '0')}'`}>
+              <h3>{c.title}</h3>
+              <p>{c.text}</p>
+            </article>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="block">
+      <h2>{t('track.lessonsTitle')}</h2>
+      <ol class="timeline">
+        {
+          lessons.map((l, i) => (
+            <li class="reveal">
+              <a href={localeUrl(lang, track, l.slug)}>
+                <span class="dot" aria-hidden="true">{i + 1}</span>
+                <span class="body">
+                  <span class="num">{t('track.lessonNumber', { n: i + 1 })} · {t('track.minutes', { count: l.entry.data.duration })}</span>
+                  <span class="title">{l.entry.data.title}</span>
+                  <span class="desc">{l.entry.data.description}</span>
+                </span>
+                <Icon name="next" class="chev" />
+              </a>
+            </li>
+          ))
+        }
+      </ol>
+    </section>
+
+    {
+      nextTrack && nextInfo && (
+        <nav class="pager">
+          <a class="next" href={localeUrl(lang, nextTrack)}>
+            <small>{t('nav.nextTrack')}</small>
+            <span>{nextInfo.title}</span>
+          </a>
+        </nav>
+      )
+    }
+  </div>
+</BaseLayout>
+
+<style>
+  .track-hero {
+    display: grid; gap: var(--space-5); align-items: center; padding-block: var(--space-4) var(--space-6);
+    grid-template-columns: 1fr auto;
+    & h1 { font-size: var(--step-4); margin-block: var(--space-2) var(--space-4); letter-spacing: -0.035em; }
+    & .intro { font-size: var(--step-1); color: var(--text-muted); max-inline-size: 46rem; line-height: 1.55; }
+    & .glyph :global(svg) { inline-size: clamp(5rem, 14vw, 9rem); }
+  }
+  .block { padding-block: var(--space-6); }
+  .block > h2 { font-size: var(--step-2); margin-block-end: var(--space-5); }
+
+  .concepts {
+    display: grid; gap: var(--space-4);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  }
+  .concept {
+    position: relative; padding: var(--space-5); border-radius: var(--radius-l);
+    background: var(--surface); border: 1px solid var(--border); overflow: hidden; isolation: isolate;
+    &::before {
+      content: var(--n); position: absolute; inset-block-start: -0.6rem; inset-inline-end: 0.6rem;
+      font: 800 4.2rem/1 var(--font-mono); color: var(--accent); opacity: 0.08; letter-spacing: -0.05em; z-index: -1;
+    }
+    & h3 { font-size: var(--step-0); margin-block-end: var(--space-2); }
+    & p { font-size: var(--step--1); color: var(--text-muted); }
+  }
+
+  .timeline {
+    list-style: none; padding: 0; display: grid; gap: var(--space-3); position: relative;
+    &::before {
+      content: ''; position: absolute; inset-block: 1.5rem; inset-inline-start: calc(var(--space-5) + 1.1rem - 1px); inline-size: 2px;
+      background: linear-gradient(var(--accent), var(--violet)); opacity: 0.3; border-radius: 2px;
+    }
+    & a {
+      position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-4); align-items: center;
+      padding: var(--space-4) var(--space-5); border-radius: var(--radius); text-decoration: none; color: var(--text);
+      background: var(--surface); border: 1px solid var(--border);
+      transition: border-color var(--dur), translate var(--dur) var(--ease-out), box-shadow var(--dur);
+      &:hover { border-color: var(--accent); translate: 4px 0; box-shadow: var(--shadow);
+        & .dot { background: var(--accent); color: var(--on-accent); scale: 1.08; }
+        & :global(.chev) { translate: 4px 0; color: var(--accent); } }
+    }
+    & .dot {
+      display: grid; place-items: center; inline-size: 2.2rem; block-size: 2.2rem; border-radius: 50%;
+      font: 700 0.85rem var(--font-mono); background: var(--surface-2); border: 2px solid var(--accent);
+      color: var(--accent-strong); transition: background-color var(--dur), color var(--dur), scale var(--dur) var(--ease-spring);
+    }
+    & .body { display: grid; gap: 0.1rem; }
+    & .num { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); }
+    & .title { font-weight: 650; }
+    & .desc { font-size: var(--step--1); color: var(--text-muted); }
+    & :global(.chev) { inline-size: 1.2rem; color: var(--text-faint); transition: translate var(--dur), color var(--dur); }
+  }
+</style>

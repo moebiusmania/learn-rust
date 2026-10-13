@@ -1,0 +1,30 @@
+{
+  "title": "Inside an Rc",
+  "subtitle": "Clone, downgrade, upgrade and drop: watch the counters",
+  "stack": "STACK",
+  "heap": "HEAP",
+  "strong": "strong",
+  "weak": "weak",
+  "dropped": "value dropped",
+  "freed": "allocation freed",
+  "empty": "uninit",
+  "buttons": {
+    "clone": "Rc::clone",
+    "downgrade": "Rc::downgrade",
+    "upgrade": "upgrade()",
+    "drop": "drop",
+    "reset": "Reset"
+  },
+  "captions": {
+    "start": "<code>Rc::new</code> allocates one block on the heap holding two counters and the value. <code>a</code> is the only strong owner.",
+    "clone": "<code>Rc::clone</code> copies the pointer into {v} and increments the strong count. The vector itself is not copied.",
+    "downgrade": "<code>Rc::downgrade</code> gives {v} a <code>Weak</code>: the weak count goes up, but a weak pointer does not keep the value alive.",
+    "upgradeOk": "<code>upgrade()</code> returned <code>Some(Rc)</code>: the value is still alive, so {v} becomes a new strong owner. The Weak it came from still exists.",
+    "upgradeNone": "<code>upgrade()</code> returned <code>None</code>: there is no strong owner left and the value is already gone. This is how Weak breaks cycles safely.",
+    "dropStrong": "Dropping {v} decrements the strong count. The remaining owners keep the value alive.",
+    "dropLast": "{v} was the last strong owner: the value is dropped right now (its <code>Drop</code> runs and the Vec frees its buffer). The block stays allocated because weak pointers still point at the counters.",
+    "dropWeak": "Dropping the Weak in {v} decrements the weak count. It never affects the value itself.",
+    "freedAfterWeak": "The last Weak is gone too: both counters are zero, so the block itself is deallocated. Press Reset to start again.",
+    "freedAll": "{v} was the last owner and there are no weak pointers: the value is dropped and the block is deallocated in one go. Press Reset to start again."
+  }
+}

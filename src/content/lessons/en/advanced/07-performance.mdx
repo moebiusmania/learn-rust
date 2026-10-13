@@ -1,0 +1,226 @@
+---
+title: Performance and zero-cost abstractions
+description: Why idiomatic Rust compiles to tight code, which build settings matter, and how to find and remove the costs that remain.
+duration: 25
+tags: [zero-cost, release profile, LTO, allocation, profiling]
+---
+
+Rust is fast for the same reasons C and C++ are: ahead-of-time compilation, values laid out inline instead of boxed behind pointers, no garbage collector and an optimizer (LLVM) that has had decades of work. What Rust adds is that the *idiomatic* code, with iterators, closures, generics and `Option`, usually compiles to the same machine code as the low-level version. This lesson is about trusting that, knowing its limits, and measuring instead of guessing.
+
+## Zero-cost abstractions
+
+Bjarne Stroustrup's definition, which Rust adopted: *what you don't use, you don't pay for; and what you do use, you couldn't hand-code any better.* An iterator chain is the canonical example. `filter` and `map` are generic structs wrapping closures; after monomorphization and inlining, the whole chain fuses into a single loop with no allocation, no virtual calls and no intermediate collections.
+
+<Playground title="Iterator chain vs hand-written loop" mode="release">
+```rust
+use std::hint::black_box;
+use std::time::Instant;
+
+fn sum_loop(data: &[u32]) -> u64 {
+    let mut total = 0u64;
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] % 3 == 0 {
+            total += data[i] as u64 * 2;
+        }
+        i += 1;
+    }
+    total
+}
+
+fn sum_iter(data: &[u32]) -> u64 {
+    data.iter()
+        .filter(|&&x| x % 3 == 0)
+        .map(|&x| x as u64 * 2)
+        .sum()
+}
+
+fn main() {
+    let data: Vec<u32> = (0..20_000_000).collect();
+    for round in 1..=2 {
+        for (name, f) in [("loop", sum_loop as fn(&[u32]) -> u64), ("iter", sum_iter)] {
+            let start = Instant::now();
+            let result = f(black_box(&data));
+            println!("round {round} {name}: {result} in {:?}", start.elapsed());
+        }
+    }
+}
+```
+</Playground>
+
+This playground compiles in **release** mode; the two versions take the same time, give or take noise on a shared server. The first round is often slower for both because the data is not yet in cache: one of many reasons why micro-benchmarks need a proper harness (more on that below).
+
+<Compare left="JavaScript">
+```js
+// Each step allocates a new array
+// and calls a closure through the JIT.
+const total = data
+  .filter((x) => x % 3 === 0)
+  .map((x) => x * 2)
+  .reduce((a, b) => a + b, 0);
+```
+
+```rust
+// Lazy adapters, fused into one loop at
+// compile time: no intermediate Vec.
+let total: u64 = data
+    .iter()
+    .filter(|&&x| x % 3 == 0)
+    .map(|&x| x as u64 * 2)
+    .sum();
+```
+</Compare>
+
+<Callout type="runtime">
+"Zero-cost" refers to runtime. The cost moves to **compile time and binary size**: every distinct closure and every concrete type creates a new monomorphized copy of the generic code for LLVM to optimize. That is why heavily generic crates compile slowly, and why `dyn Trait` is sometimes the right choice to keep build times and binaries in check, at the price of an indirect call.
+</Callout>
+
+### Bounds checks, and how iterators avoid them
+
+Indexing a slice (`data[i]`) is checked: an out-of-bounds index panics instead of reading random memory. The check is a compare and a well-predicted branch, cheap but not free, and it can prevent vectorization. The optimizer removes it when it can prove the index is in range, which it does easily for iterators and for loops bounded by `len()`:
+
+```rust
+// Bounds check on every b[i]: the compiler cannot prove b.len() >= a.len()
+fn dot_indexed(a: &[f32], b: &[f32]) -> f32 {
+    let mut s = 0.0;
+    for i in 0..a.len() { s += a[i] * b[i]; }
+    s
+}
+
+// No checks: zip stops at the shorter slice, so every access is in range
+fn dot_zip(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+```
+
+When you really need indexing in a hot loop, a single up-front assertion such as `assert!(b.len() >= a.len())` or re-slicing `let b = &b[..a.len()];` usually lets LLVM drop the checks inside the loop. `get_unchecked` exists but is `unsafe`, and rarely needed.
+
+## The release profile
+
+`cargo build` produces a debug build: no optimizations, full debug info, overflow checks on. It can easily be 10 to 50 times slower than release, so **never benchmark a debug build**. `cargo build --release` uses `opt-level = 3`, and a few more knobs in `Cargo.toml` let you trade compile time for size or speed:
+
+<ProfileTuner />
+
+A few practical notes:
+
+- `lto = "thin"` is a good default for production builds; `"fat"` plus `codegen-units = 1` squeezes out the last few percent for a final release, at a large compile-time cost.
+- `debug = false` is already the release default. If you want symbol names in profilers, set `debug = "line-tables-only"` instead of turning on full debug info.
+- `-C target-cpu=native` (via `RUSTFLAGS` or `.cargo/config.toml`) lets LLVM use every instruction your CPU supports, such as AVX2. Great for software you run on your own machines, wrong for binaries you distribute.
+- Profiles can be overridden per dependency: `[profile.dev.package."*"] opt-level = 2` keeps your own code quick to compile while making debug builds of heavy dependencies usable.
+
+## Allocation awareness
+
+After build settings, the most common performance issue in Rust programs is not computation but **allocation**: heap allocations go through the global allocator, may take a lock, and scatter data across memory. The language makes them visible (`Vec::new`, `String::from`, `Box::new`, `.clone()`, `.to_string()`, `format!`), so they are easy to find.
+
+<Playground title="Pre-sizing collections">
+```rust
+fn main() {
+    // Growing from empty: the buffer is reallocated (and copied) repeatedly.
+    let mut grown = Vec::new();
+    let mut reallocations = 0;
+    let mut capacity = grown.capacity();
+    for i in 0..10_000 {
+        grown.push(i);
+        if grown.capacity() != capacity {
+            reallocations += 1;
+            capacity = grown.capacity();
+        }
+    }
+    println!("Vec::new():           {reallocations} reallocations, capacity {}", grown.capacity());
+
+    // Sizing up front: one allocation, the buffer never moves.
+    let mut sized = Vec::with_capacity(10_000);
+    let start = sized.as_ptr();
+    for i in 0..10_000 {
+        sized.push(i);
+    }
+    println!("Vec::with_capacity(): buffer moved = {}", start != sized.as_ptr());
+
+    // The same applies to strings and to collect() from an exact-size iterator.
+    let squares: Vec<u64> = (0..10_000u64).map(|x| x * x).collect();
+    println!("collect() capacity:   {}", squares.capacity());
+}
+```
+</Playground>
+
+Habits that pay off:
+
+- **Size up front** with `Vec::with_capacity`, `String::with_capacity` or `reserve` when you know the count. `collect()` does it for you when the iterator reports an exact size.
+- **Borrow instead of cloning.** Accept `&str` and `&[T]` in function parameters rather than `String` and `Vec<T>`. A `.clone()` added to silence the borrow checker is the first thing to look at in a hot path.
+- **Reuse buffers** across loop iterations with `clear()`, which keeps the capacity.
+- **Allocate only when needed** with `Cow`, a "clone on write" smart pointer that holds either a borrow or an owned value:
+
+<Playground title="Cow: borrow when possible, allocate when necessary">
+```rust
+use std::borrow::Cow;
+
+/// Replaces tabs with four spaces, allocating only when there is a tab.
+fn normalize(input: &str) -> Cow<'_, str> {
+    if input.contains('\t') {
+        Cow::Owned(input.replace('\t', "    "))
+    } else {
+        Cow::Borrowed(input)
+    }
+}
+
+fn main() {
+    for line in ["no tabs here", "key:\tvalue", "plain text again"] {
+        match normalize(line) {
+            Cow::Borrowed(s) => println!("borrowed  {s:?}"),
+            Cow::Owned(s) => println!("allocated {s:?}"),
+        }
+    }
+}
+```
+</Playground>
+
+For many small collections, crates such as **smallvec** and **arrayvec** keep the first N elements inline on the stack and only spill to the heap when they grow beyond that.
+
+<Callout type="compare" from="Java / Go">
+With a generational GC, short-lived allocations are very cheap to make and the cost shows up later as collection work. In Rust each allocation is a call to `malloc` and each drop a call to `free`, with no background collector. Neither model is universally faster, but in Rust the costs are local and predictable: a function that does not allocate never causes a pause elsewhere.
+</Callout>
+
+## Inlining and dispatch
+
+Inlining is what makes abstractions free, and LLVM decides it automatically within a crate. Across crates, generic functions are always available for inlining (they are instantiated in your crate), while non-generic ones are not unless LTO is on or the function is marked `#[inline]`. Library authors put `#[inline]` on small, hot, non-generic public functions; application code rarely needs it, and `#[inline(always)]` is a last resort that often makes things worse by bloating code.
+
+Similarly, prefer generics (`impl Trait`) in hot paths so calls can be inlined, and use `dyn Trait` where flexibility, compile time or code size matter more than a few nanoseconds per call.
+
+## Measure, don't guess
+
+Rust gives you control, which makes it tempting to optimize by intuition. Resist it:
+
+```sh
+cargo install flamegraph
+cargo flamegraph --bin server     # sampling profile, rendered as an SVG flame graph
+perf record -g ./target/release/server && perf report   # Linux
+```
+
+On macOS, Instruments and `samply` serve the same purpose. For micro-benchmarks use **criterion** (or the built-in `#[bench]` on nightly): it warms up, runs many iterations, applies statistics and tells you whether a change is real or noise.
+
+```rust
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+fn bench(c: &mut Criterion) {
+    let data: Vec<u32> = (0..100_000).collect();
+    c.bench_function("sum_iter", |b| b.iter(|| sum_iter(black_box(&data))));
+}
+criterion_group!(benches, bench);
+criterion_main!(benches);
+```
+
+`std::hint::black_box` hides a value from the optimizer, so it cannot compute the result at compile time or delete the work as unused. To see what the compiler actually produced, `cargo asm` (from `cargo-show-asm`) or Compiler Explorer (godbolt.org) shows the assembly for a single function.
+
+<Callout type="tip" title="Compile time is performance too">
+For a developer, the slowest part of Rust is often the build. `cargo check` for quick feedback, `cargo build --timings` to find slow crates, fewer heavy proc-macro dependencies, splitting a large crate into a workspace so codegen runs in parallel, and a faster linker (mold or lld) are the usual fixes.
+</Callout>
+
+## Key takeaways
+
+- Iterators, closures and generics compile to the same code as hand-written loops; the cost moves to compile time and binary size.
+- Always measure release builds; tune `opt-level`, `lto`, `codegen-units`, `panic` and `strip` in `[profile.release]` according to whether you want speed, size or build time.
+- Bounds checks are cheap and are often eliminated; iterators and up-front assertions help the optimizer remove them.
+- Allocation is the usual hotspot: pre-size collections, borrow instead of cloning, reuse buffers, use `Cow`.
+- Prefer static dispatch in hot paths; use `#[inline]` sparingly, mainly in libraries.
+- Profile with flamegraphs and benchmark with criterion and `black_box` before and after every optimization.

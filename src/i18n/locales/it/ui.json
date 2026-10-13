@@ -1,0 +1,86 @@
+{
+  "site": {
+    "title": "Rust, per sviluppatori",
+    "shortTitle": "Rust per Dev",
+    "description": "Un corso interattivo di Rust per sviluppatori che sanno già programmare. Tre percorsi: base, intermedio e avanzato."
+  },
+  "nav": {
+    "skipToContent": "Vai al contenuto",
+    "home": "Home",
+    "tracks": "Percorsi",
+    "language": "Lingua",
+    "theme": "Tema",
+    "themeAuto": "Sistema",
+    "themeLight": "Chiaro",
+    "themeDark": "Scuro",
+    "menu": "Menu",
+    "prev": "Precedente",
+    "next": "Successiva",
+    "backToTrack": "Torna al percorso",
+    "lessons": "Lezioni",
+    "onThisPage": "In questa pagina",
+    "nextTrack": "Prosegui con il percorso successivo"
+  },
+  "home": {
+    "eyebrow": "Un corso interattivo",
+    "heroTitle": "Impara Rust come hai imparato il tuo secondo linguaggio: per confronto.",
+    "heroLead": "Cicli, closure e generici li conosci già. Questo corso salta le basi della programmazione e si concentra su ciò che in Rust è davvero diverso: ownership, borrow checker, sistema dei tipi e un runtime ridotto quasi a zero.",
+    "cta": "Inizia il percorso base",
+    "ctaSecondary": "Vedi tutti i percorsi",
+    "whyTitle": "Cosa rende Rust diverso",
+    "why": [
+      { "title": "Nessun garbage collector", "text": "La memoria viene liberata in modo deterministico quando il suo proprietario esce dallo scope. Niente pause, niente finalizer, niente reference counting se non lo chiedi tu." },
+      { "title": "Verificato in compilazione", "text": "Data race, use-after-free e dereferenziazioni di null vengono rifiutati dal compilatore, non scoperti in produzione." },
+      { "title": "Astrazioni a costo zero", "text": "Iteratori, generici e closure vengono compilati nello stesso codice macchina che scriveresti a mano." },
+      { "title": "Gli errori sono valori", "text": "Niente eccezioni. Il fallimento fa parte della firma della funzione tramite Result e Option." }
+    ],
+    "tracksTitle": "Tre percorsi",
+    "tracksLead": "Ogni percorso alterna spiegazioni dei concetti, diagrammi ed esempi eseguibili. Ogni blocco di codice segnato come playground si può modificare ed eseguire nel browser.",
+    "lessonsCount": "{count} lezioni",
+    "minutes": "~{count} min",
+    "startTrack": "Apri il percorso",
+    "howTitle": "Come funzionano gli esempi",
+    "howText": "I playground modificabili vengono compilati ed eseguiti sul Rust Playground ufficiale (play.rust-lang.org). Le visualizzazioni girano interamente nel tuo browser."
+  },
+  "track": {
+    "conceptsTitle": "Concetti chiave",
+    "lessonsTitle": "Lezioni",
+    "lessonNumber": "Lezione {n}",
+    "minutes": "{count} min"
+  },
+  "lesson": {
+    "minutes": "{count} min di lettura",
+    "lessonOf": "Lezione {n} di {total}",
+    "comingFrom": "Se arrivi da"
+  },
+  "playground": {
+    "label": "Playground",
+    "run": "Esegui",
+    "running": "Compilazione…",
+    "reset": "Ripristina",
+    "copy": "Copia",
+    "copied": "Copiato",
+    "output": "Output",
+    "noOutput": "(nessun output)",
+    "compilerOutput": "Compilatore",
+    "networkError": "Impossibile raggiungere il Rust Playground. Controlla la connessione e riprova.",
+    "editHint": "Modificabile: cambia il codice e premi Esegui (Ctrl/⌘ + Invio).",
+    "expectError": "Questo esempio non compila di proposito: leggi l'errore."
+  },
+  "callout": {
+    "note": "Nota",
+    "tip": "Suggerimento",
+    "warn": "Attenzione",
+    "runtime": "Dietro le quinte",
+    "compare": "Se arrivi da…"
+  },
+  "footer": {
+    "text": "Pensato per sviluppatori che passano a Rust. Gli esempi vengono eseguiti su play.rust-lang.org.",
+    "notAffiliated": "Non affiliato alla Rust Foundation."
+  },
+  "notFound": {
+    "title": "Pagina non trovata",
+    "text": "Questa pagina non esiste, oppure è stata spostata.",
+    "back": "Torna alla home"
+  }
+}

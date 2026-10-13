@@ -1,0 +1,213 @@
+---
+title: Generics, monomorphization and dyn Trait
+description: Write code once for many types, then choose per call site between compile-time specialization and runtime dispatch through a vtable.
+duration: 22
+tags: [generics, trait bounds, impl Trait, dyn Trait, vtables]
+---
+
+Generics in Rust look like generics in Java, C# or TypeScript: angle brackets, type parameters, constraints. Underneath they work very differently. Java erases type parameters and boxes everything behind a reference; TypeScript erases types entirely. Rust does the opposite: it **specializes** generic code for every concrete type it is used with. When you do want runtime polymorphism, you ask for it explicitly with `dyn Trait`, and the cost model is in plain sight.
+
+## Generic functions and trait bounds
+
+An unconstrained `T` can do almost nothing: the compiler will not let you compare, print or copy it, because it cannot know that every possible `T` supports those operations. **Trait bounds** state what you need, and the compiler checks the body against the bounds *once*, at the definition, not at each instantiation like C++ templates.
+
+<Playground title="generics.rs">
+```rust
+use std::fmt::Display;
+
+// T must be comparable and cheap to copy.
+fn largest<T: PartialOrd + Copy>(items: &[T]) -> T {
+    let mut max = items[0];
+    for &item in items {
+        if item > max { max = item; }
+    }
+    max
+}
+
+struct Pair<T> { a: T, b: T }
+
+impl<T> Pair<T> {
+    fn new(a: T, b: T) -> Self { Pair { a, b } }
+}
+
+// This method only exists when T also implements Display + PartialOrd.
+impl<T> Pair<T>
+where
+    T: Display + PartialOrd,
+{
+    fn show_max(&self) {
+        let max = if self.a >= self.b { &self.a } else { &self.b };
+        println!("max of pair = {max}");
+    }
+}
+
+fn main() {
+    println!("{}", largest(&[3, 9, 2]));
+    println!("{}", largest(&[1.5, -0.5]));
+    println!("{}", largest(&['r', 'u', 's', 't']));
+
+    Pair::new(10, 20).show_max();
+    Pair::new("ab", "ba").show_max();
+}
+```
+</Playground>
+
+Two details worth noticing:
+
+- `where` clauses are the same bounds written after the signature. Use them when the list gets long; they read better and can express bounds on things other than plain type parameters.
+- **Conditional methods**: the second `impl` block adds `show_max` only to `Pair<T>` types where `T` meets extra bounds. `Pair<Vec<u8>>` is still a valid type, it just does not have that method. This is how std gives `Vec<T>` a `sort` method only when `T: Ord`.
+
+<Callout type="compare" from="C++ templates">
+C++ checks a template body only when it is instantiated, which produces famously long errors deep inside library code. Rust checks generic bodies against their declared bounds up front. If `largest` compiles, it compiles for every `T` that satisfies `PartialOrd + Copy`, and a caller that passes the wrong type gets an error at the call site naming the missing trait.
+</Callout>
+
+## Monomorphization
+
+At compile time, every use of `largest` with a new concrete type generates a fresh copy of the function specialized for that type: `largest::<i32>`, `largest::<f64>`, `largest::<char>`. Each copy is optimized independently, with the comparison inlined as a single CPU instruction. This process is called **monomorphization**, and it is why Rust generics are a zero-cost abstraction: the result is exactly what you would have written by hand for each type.
+
+The trade-off is compile time and binary size. A generic function used with 30 types becomes 30 functions. Large generic-heavy codebases sometimes reduce this by writing a thin generic wrapper that converts its input and calls a non-generic inner function.
+
+## impl Trait: a shorthand with a twist
+
+`impl Trait` can appear in two positions, with different meanings:
+
+- **Argument position**, `fn notify(n: &impl Notify)`, is just sugar for a generic parameter, `fn notify<N: Notify>(n: &N)`. The *caller* picks the type.
+- **Return position**, `fn make() -> impl Notify`, means "some single concrete type that implements `Notify`, which I am not naming". The *function* picks the type, and the caller can only use it through the trait. This is essential for returning closures and iterator chains, whose types are unnameable or very long.
+
+The returned type is still static: every call to `make` returns the same concrete type, and calls on it are resolved at compile time.
+
+## dyn Trait: dynamic dispatch on request
+
+Sometimes the concrete type is not known until runtime: a list of plugins, a queue holding different notification kinds, a handler chosen by configuration. For that, Rust offers **trait objects**: `dyn Trait` behind a pointer (`&dyn Trait`, `Box<dyn Trait>`, `Arc<dyn Trait>`).
+
+<Playground title="Static vs dynamic dispatch">
+```rust
+use std::mem::size_of;
+
+trait Notify {
+    fn send(&self) -> String;
+}
+
+struct Email { to: String }
+struct Sms { number: u64 }
+
+impl Notify for Email {
+    fn send(&self) -> String { format!("email to {}", self.to) }
+}
+impl Notify for Sms {
+    fn send(&self) -> String { format!("sms to {}", self.number) }
+}
+
+// Static dispatch: one copy per concrete type.
+fn notify_static(n: &impl Notify) -> String { n.send() }
+
+// Dynamic dispatch: one copy, call goes through a vtable.
+fn notify_dyn(n: &dyn Notify) -> String { n.send() }
+
+// impl Trait in return position: the caller sees an opaque type.
+fn make_default() -> impl Notify {
+    Email { to: "ops@example.com".into() }
+}
+
+fn main() {
+    let e = Email { to: "ada@example.com".into() };
+    let s = Sms { number: 5550100 };
+    println!("{}", notify_static(&e));
+    println!("{}", notify_dyn(&s));
+    println!("{}", make_default().send());
+
+    // A heterogeneous collection needs dyn: each element has a different type.
+    let queue: Vec<Box<dyn Notify>> = vec![Box::new(e), Box::new(s)];
+    for n in &queue {
+        println!("queued: {}", n.send());
+    }
+
+    println!("&Email       = {} bytes", size_of::<&Email>());
+    println!("&dyn Notify  = {} bytes", size_of::<&dyn Notify>());
+    println!("Box<dyn ..>  = {} bytes", size_of::<Box<dyn Notify>>());
+}
+```
+</Playground>
+
+The sizes printed at the end reveal the mechanism. A reference to a concrete type is one pointer. A reference to a `dyn Trait` is a **fat pointer**: one pointer to the data and one to a **vtable**, a static table generated by the compiler for each (type, trait) pair. Toggle between the two modes and animate a call:
+
+<DispatchVisualizer />
+
+<Callout type="runtime">
+A vtable holds the type's size and alignment, a pointer to its destructor (`drop_in_place`) and one function pointer per trait method. Calling `n.send()` on a `&dyn Notify` loads the vtable pointer, loads the `send` entry, and performs an indirect call. That costs a few nanoseconds at most, but it blocks inlining, so the optimizer cannot see through the call. Unlike Java or C#, objects carry no hidden header: the vtable pointer lives in the reference, not in the value, so a plain `Email` stays exactly as large as its fields.
+</Callout>
+
+## Dyn compatibility
+
+Not every trait can become a trait object. Because the concrete type is erased, the compiler must be able to build a vtable with a fixed set of function pointers. A trait is **dyn compatible** (formerly called "object safe") when, roughly:
+
+- no method returns `Self` by value or takes `Self` as a by-value parameter (its size is unknown behind `dyn`);
+- no method has its own generic type parameters (there would be infinitely many vtable entries);
+- the trait does not require `Self: Sized`.
+
+Methods that break these rules can be kept and excluded from the vtable by adding `where Self: Sized` to them.
+
+<Playground title="Not dyn compatible" expectError>
+```rust
+trait Duplicate {
+    // Returning Self by value: the size of Self is unknown behind dyn.
+    fn duplicate(&self) -> Self;
+}
+
+impl Duplicate for String {
+    fn duplicate(&self) -> Self { self.clone() }
+}
+
+fn main() {
+    let items: Vec<Box<dyn Duplicate>> = vec![Box::new(String::from("hi"))];
+    println!("{}", items.len());
+}
+```
+</Playground>
+
+This is why `Clone` itself cannot be used as `dyn Clone`. Crates such as `dyn-clone` work around it with a helper method returning `Box<dyn Trait>`.
+
+## Choosing between them
+
+<Compare left="Java / C#">
+```java
+// Always dynamic: interface calls go
+// through a virtual table at runtime
+// (the JIT may devirtualize hot paths).
+List<Notifier> all = List.of(
+    new Email("ada"), new Sms(555)
+);
+for (Notifier n : all) n.send();
+```
+
+```rust
+// You choose, per call site:
+fn fast(n: &impl Notify) { n.send(); }     // static
+fn flexible(n: &dyn Notify) { n.send(); }  // dynamic
+
+let all: Vec<Box<dyn Notify>> = vec![
+    Box::new(Email { to: "ada".into() }),
+    Box::new(Sms { number: 555 }),
+];
+```
+</Compare>
+
+A practical rule of thumb:
+
+| Prefer generics / `impl Trait` when | Prefer `dyn Trait` when |
+| --- | --- |
+| the type is known at each call site | the set of types is open or chosen at runtime |
+| the code is hot and benefits from inlining | you need a heterogeneous collection |
+| you return closures or iterators | compile time or binary size matters more than nanoseconds |
+| the trait is not dyn compatible | you want to hide implementation types behind a stable API |
+
+Most Rust code starts with generics and introduces `dyn` at the boundaries where flexibility is needed: plugin registries, error types (`Box<dyn Error>`), callbacks stored in structs.
+
+## Key takeaways
+
+- Trait bounds declare what a generic type must support; the body is checked once against the bounds.
+- Generics are monomorphized: one specialized, fully optimized copy per concrete type, at the cost of compile time and binary size.
+- `impl Trait` in argument position is a generic parameter; in return position it is a single hidden concrete type chosen by the function.
+- `dyn Trait` uses a fat pointer (data + vtable) and an indirect call; objects themselves carry no header.
+- Only dyn compatible traits can become trait objects: no `Self` by value, no generic methods.
+- Default to static dispatch, reach for `dyn` when types are only known at runtime or when you need heterogeneous collections.

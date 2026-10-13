@@ -1,0 +1,138 @@
+---
+title: Toolchain, Cargo e modello di compilazione
+description: Cosa installi, cosa fa Cargo per te e cosa succede tra i tuoi file .rs e un binario nativo.
+duration: 15
+tags: [rustup, cargo, rustc, edizioni]
+---
+
+Se arrivi da JavaScript, Python o Java, la prima sorpresa non è la sintassi: è che **non c'è nessun runtime da installare**. Installi una *toolchain di compilazione*, e quello che produce è un eseguibile nativo autosufficiente.
+
+## La toolchain in un comando
+
+Rust si distribuisce tramite **rustup**, un gestore di toolchain (simile a `nvm` o `pyenv`, ma ufficiale). Un'installazione di default ti dà:
+
+| Strumento | Ruolo | Equivalente più vicino |
+| --- | --- | --- |
+| `rustc` | Il compilatore | `javac`, `tsc`, `gcc` |
+| `cargo` | Build system + package manager + test runner | `npm` + `webpack` + `jest`, `mvn`, `go` |
+| `std` | Libreria standard, precompilata per il tuo target | Class library del JDK |
+| `clippy` | Linter con centinaia di controlli sugli idiomi | ESLint, Pylint |
+| `rustfmt` | Formatter, un unico stile canonico | Prettier, gofmt, Black |
+| `rust-analyzer` | Language server per il tuo editor | tsserver, Pylance |
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup update            # nuova stable ogni 6 settimane
+rustup target add wasm32-unknown-unknown   # target per la cross-compilazione
+```
+
+<Callout type="note" title="Canali di rilascio ed edizioni">
+Una nuova versione **stable** esce ogni sei settimane, con una forte garanzia di retrocompatibilità. I cambiamenti di *sintassi* incompatibili vengono raggruppati in **edizioni** (2015, 2018, 2021, 2024), scelte per singolo crate in `Cargo.toml`. Crate su edizioni diverse si linkano tra loro senza problemi, quindi l'ecosistema non si spacca mai come è successo con Python 2 → 3.
+</Callout>
+
+## Cargo: un solo strumento per tutto il flusso di lavoro
+
+Quasi ogni progetto Rust è un **package Cargo**. Raramente chiamerai `rustc` direttamente.
+
+```sh
+cargo new hello        # crea Cargo.toml + src/main.rs + un repository git
+cd hello
+cargo run              # compila (debug) ed esegue
+cargo check            # solo controllo dei tipi: il ciclo di feedback più rapido
+cargo test             # compila ed esegue unit test, test di integrazione e doc test
+cargo build --release  # build ottimizzata in target/release/
+cargo add serde        # aggiunge una dipendenza da crates.io
+```
+
+Il manifest è in TOML, e il file di lock (`Cargo.lock`) fissa le versioni esatte, proprio come `package-lock.json`:
+
+```toml
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+
+<Callout type="compare" from="npm / Maven">
+Le dipendenze vengono compilate **dai sorgenti** dentro il tuo binario: in esecuzione non esiste una cartella di librerie condivise come `node_modules`, né un classpath. L'output in `target/release/hello` gira su una macchina che non ha mai visto Rust.
+</Callout>
+
+## Dal sorgente al codice macchina
+
+L'unità di compilazione è il **crate**, non il file. `rustc` prende il file radice (`main.rs` o `lib.rs`), segue le dichiarazioni `mod` e compila l'intero albero in un colpo solo. Scorri la pipeline per vedere dove vive ogni funzionalità di Rust:
+
+<CompilePipeline />
+
+Due conseguenze contano nel lavoro di tutti i giorni:
+
+1. **Il borrow checker gira sulla MIR**, dopo il controllo dei tipi. Per questo gli errori di ownership compaiono solo quando il codice è già corretto dal punto di vista dei tipi: sistema prima gli errori di tipo, poi i lifetime.
+2. **I generici vengono monomorfizzati** prima di LLVM: `Vec<i32>` e `Vec<String>` diventano due pezzi di codice macchina indipendenti. Le astrazioni non costano nulla a runtime, ma i tempi di compilazione crescono con il numero di tipi concreti che istanzi.
+
+<Callout type="runtime">
+"Rust non ha runtime" è quasi vero. Un binario Rust contiene una minuscola routine di avvio (imposta la guardia dello stack, raccoglie gli `args`, chiama `main`), l'allocatore di memoria della libreria C o uno a tua scelta, e il meccanismo dei **panic** che srotola lo stack in caso di bug fatali. Non c'è garbage collector, né scheduler, né JIT, né metadati di reflection.
+</Callout>
+
+## Ciao, Rust
+
+Ogni eseguibile parte da `fn main()`. `println!` finisce con un punto esclamativo perché è una **macro**: verifica la stringa di formato rispetto agli argomenti *in fase di compilazione*.
+
+<Playground title="hello.rs">
+```rust
+fn main() {
+    let language = "Rust";
+    let year = 2015;
+    println!("Ciao da {language}, stabile dal {year}!");
+
+    // Formattazione posizionale e di debug
+    let primes = [2, 3, 5, 7];
+    println!("{} numeri primi: {:?}", primes.len(), primes);
+    println!("{:>8.3}|{:<6}|{:#x}", 3.14159, "sx", 255);
+}
+```
+</Playground>
+
+Prova a togliere la variabile `year` ed eseguire di nuovo: l'errore arriva dal compilatore, non da un crash a runtime, perché la macro è stata espansa in codice che fa riferimento a `year`.
+
+<Compare left="TypeScript">
+```ts
+const language = "TypeScript";
+const primes = [2, 3, 5, 7];
+console.log(`Ciao da ${language}`);
+console.log(primes.length, "primi:", primes);
+```
+
+```rust
+let language = "Rust";
+let primes = [2, 3, 5, 7];
+println!("Ciao da {language}");
+println!("{} primi: {:?}", primes.len(), primes);
+```
+</Compare>
+
+`{}` usa il trait `Display` (output per l'utente), `{:?}` usa `Debug` (output per lo sviluppatore). Gli array implementano `Debug` ma non `Display`, quindi `{}` non compilerebbe per `primes`: anche la formattazione è controllata dai tipi.
+
+## Debug e release
+
+<Playground title="L'overflow viene controllato nelle build di debug">
+```rust
+fn main() {
+    let big: u8 = 255;
+    // std::hint::black_box nasconde il valore all'ottimizzatore
+    let next = std::hint::black_box(big) + 1;
+    println!("{next}");
+}
+```
+</Playground>
+
+In una build di **debug** questo codice va in panic con *attempt to add with overflow*. In modalità **release** il controllo viene rimosso e il valore torna a `0`. Se ti serve un comportamento preciso indipendentemente dal profilo, dichiaralo esplicitamente con `wrapping_add`, `checked_add` o `saturating_add`, che incontrerai nella prossima lezione.
+
+## Punti chiave
+
+- `rustup` gestisce le toolchain, `cargo` pensa a tutto il resto: build, test, dipendenze, documentazione.
+- Il crate è l'unità di compilazione; l'output è un binario nativo e autosufficiente.
+- Il borrow checking avviene tardi nella pipeline, sulla MIR; i generici vengono monomorfizzati prima della generazione del codice.
+- Macro come `println!` vengono espanse in compilazione, quindi anche le stringhe di formato sono controllate dai tipi.
+- Le build di debug e di release differiscono per controlli e velocità: fai benchmark solo con `--release`.

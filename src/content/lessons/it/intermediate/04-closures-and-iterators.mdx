@@ -1,0 +1,233 @@
+---
+title: Closure e iteratori
+description: Come le closure catturano l'ambiente, la gerarchia Fn/FnMut/FnOnce e perché le catene di iteratori pigri compilano nello stesso codice di un ciclo scritto a mano.
+duration: 24
+tags: [closure, trait Fn, iteratori, pigrizia]
+---
+
+Lambda e catene `map`/`filter` le hai usate in ogni linguaggio moderno. Rust ha entrambe, con due differenze che cambiano tutto: il rapporto tra una closure e le variabili che cattura è verificato dal borrow checker, e le catene di iteratori sono **pigre, generiche e messe inline**, quindi il codice idiomatico in stile funzionale gira veloce quanto un ciclo `for` con indice.
+
+## Sintassi delle closure e cattura
+
+Una closure si scrive `|parametri| corpo`. I tipi dei parametri e del valore di ritorno di solito vengono dedotti. Ciò che rende interessanti le closure di Rust è *come* catturano le variabili dallo scope circostante. Il compilatore sceglie la modalità meno potente di cui il corpo ha bisogno:
+
+- **per riferimento condiviso** se il corpo legge soltanto la variabile;
+- **per riferimento mutabile** se il corpo la modifica;
+- **per valore (move)** se il corpo la consuma, oppure se scrivi `move` davanti alla closure.
+
+Questa scelta determina quale dei tre trait implementa la closure:
+
+| Trait | Si può chiamare | Cattura | Uso tipico |
+| --- | --- | --- | --- |
+| `Fn` | molte volte, anche in parallelo | per `&` (o niente) | callback, predicati, `map` |
+| `FnMut` | molte volte, non in parallelo | per `&mut` | accumulatori, `for_each` con stato |
+| `FnOnce` | esattamente una volta | per valore, spostato fuori alla chiamata | `thread::spawn`, `Option::map_or_else` |
+
+Formano una gerarchia: ogni `Fn` è anche `FnMut`, e ogni `FnMut` è anche `FnOnce`. Una funzione che accetta `FnOnce` accetta quindi qualsiasi closure; una che richiede `Fn` ne accetta il minor numero.
+
+<Playground title="Fn, FnMut e FnOnce">
+```rust
+fn apply<F: Fn(i32) -> i32>(f: F, x: i32) -> i32 { f(x) }
+fn apply_mut<F: FnMut()>(mut f: F) { f(); f(); }
+fn apply_once<F: FnOnce() -> String>(f: F) -> String { f() }
+
+fn main() {
+    // Fn: cattura `offset` per riferimento condiviso.
+    let offset = 10;
+    let add = |x| x + offset;
+    println!("Fn:     {}", apply(add, 5));
+
+    // FnMut: cattura `count` per riferimento mutabile.
+    let mut count = 0;
+    apply_mut(|| count += 1);
+    println!("FnMut:  count = {count}");
+
+    // FnOnce: sposta `name` fuori dalla closure quando viene chiamata.
+    let name = String::from("Ferris");
+    let consume = move || name;     // prende l'ownership di `name`
+    println!("FnOnce: {}", apply_once(consume));
+    // println!("{name}");          // errore: valore spostato nella closure
+}
+```
+</Playground>
+
+Finché la closure `FnMut` tiene il suo `&mut count`, valgono le regole sui prestiti viste nel percorso base: non potresti leggere `count` altrove finché la closure non ha finito. È così che Rust elimina il classico bug "la callback modifica lo stato mentre ci sto iterando sopra", senza alcun lock a runtime.
+
+<Callout type="runtime">
+Una closure viene compilata in una struct anonima i cui campi sono le variabili catturate (o riferimenti a esse), più un'implementazione del trait `Fn*` corretto il cui metodo è il corpo. Non avviene alcuna allocazione sullo heap, e spesso la struct viene eliminata del tutto dall'ottimizzatore. Per questo ogni closure ha un tipo unico e senza nome: due closure con la stessa firma sono comunque tipi diversi, proprio come due struct diverse.
+</Callout>
+
+## Restituire e memorizzare closure
+
+Dato che ogni closure ha il suo tipo, non puoi scriverlo in una firma. Hai due opzioni, che rispecchiano il dispatch statico e dinamico della lezione sui generici:
+
+<Playground title="Restituire closure">
+```rust
+// Ogni closure ha il suo tipo senza nome: restituiscila come `impl Fn`...
+fn make_adder(n: i32) -> impl Fn(i32) -> i32 {
+    move |x| x + n      // `move`: la closure deve possedere `n`, lo stack frame sparisce
+}
+
+// ...oppure mettila in un Box quando closure diverse devono condividere un tipo.
+fn make_op(name: &str) -> Box<dyn Fn(i32, i32) -> i32> {
+    match name {
+        "add" => Box::new(|a, b| a + b),
+        "mul" => Box::new(|a, b| a * b),
+        _ => Box::new(|a, _| a),
+    }
+}
+
+fn main() {
+    let add5 = make_adder(5);
+    println!("{}", add5(1));
+
+    let ops = ["add", "mul", "nop"];
+    for op in ops {
+        println!("{op}: {}", make_op(op)(6, 7));
+    }
+}
+```
+</Playground>
+
+Il `move` in `make_adder` è obbligatorio: senza, la closure prenderebbe in prestito `n` da uno stack frame che sparisce quando la funzione ritorna. Rust lo rifiuta in compilazione; JavaScript e Python tengono silenziosamente in vita il frame sullo heap.
+
+<Compare left="JavaScript">
+```js
+function makeAdder(n) {
+  // il motore tiene in vita `n` in un
+  // ambiente sullo heap, raccolto più tardi
+  return (x) => x + n;
+}
+
+const counter = (() => {
+  let count = 0;
+  return () => ++count;  // condiviso, mutabile
+})();
+```
+
+```rust
+fn make_adder(n: i32) -> impl Fn(i32) -> i32 {
+    // `n` viene copiato nella struct della closure:
+    // niente heap, niente GC, size_of = 4 byte
+    move |x| x + n
+}
+
+let mut count = 0;
+let mut counter = || { count += 1; count };
+// `counter` tiene &mut count: nessun altro
+// può toccare `count` finché è in vita
+```
+</Compare>
+
+## Il trait Iterator
+
+Tutto ciò che è iterabile in Rust finisce per implementare un unico trait:
+
+```rust
+trait Iterator {
+    type Item;
+    fn next(&mut self) -> Option<Self::Item>;
+    // ...più circa 75 metodi forniti: map, filter, zip, sum, collect...
+}
+```
+
+Un ciclo `for` è zucchero sintattico per chiamare `next` finché restituisce `None`. Gli adattatori come `map` e `filter` non eseguono nulla: avvolgono l'iteratore precedente in una nuova struct e la restituiscono. Il lavoro avviene solo quando un **consumatore** (`collect`, `sum`, `fold`, `for_each`, un ciclo `for`) inizia a chiamare `next`. Ogni chiamata estrae **un solo** valore attraverso l'intera catena prima che venga richiesto il successivo.
+
+<IteratorPipeline />
+
+Prova a cambiare il predicato: il contatore della sorgente mostra quanti valori sono stati effettivamente prodotti. Con `take(3)`, i valori dopo la terza corrispondenza non vengono mai generati. È la pigrizia a rendere pratici gli iteratori infiniti come `(1..)` o `std::iter::repeat`.
+
+<Playground title="Adattatori e consumatori">
+```rust
+fn main() {
+    let words = vec!["mela", "kiwi", "banana", "fico", "ciliegia"];
+
+    // Non succede nulla finché `collect` non estrae i valori lungo la catena.
+    let lens: Vec<(usize, usize)> = words
+        .iter()
+        .map(|w| { println!("  map    {w}"); w.len() })
+        .filter(|&n| { println!("  filter {n}"); n > 3 })
+        .enumerate()
+        .take(2)
+        .collect();
+    println!("risultato: {lens:?}");
+
+    // I consumatori riducono il flusso a un solo valore.
+    let total: usize = words.iter().map(|w| w.len()).sum();
+    let longest = words.iter().fold("", |acc, w| if w.len() > acc.len() { w } else { acc });
+    println!("totale = {total}, più lunga = {longest}");
+
+    // zip e flat_map
+    let prices = [1.2, 0.5, 2.0];
+    for (w, p) in words.iter().zip(prices) {
+        println!("{w:>6}: {p:.2}");
+    }
+    let letters: String = words.iter().take(2).flat_map(|w| w.chars().rev()).collect();
+    println!("{letters}");
+}
+```
+</Playground>
+
+Guarda l'ordine dell'output: `map` e `filter` si alternano elemento per elemento, e `banana`, `fico` e `ciliegia` non vengono mai visitati. `collect` è generico rispetto alla destinazione: la stessa catena può produrre un `Vec`, una `String`, una `HashMap` o un `Result<Vec<_>, E>`, a seconda dell'annotazione di tipo.
+
+## iter, iter_mut, into_iter
+
+Le collezioni offrono tre modi di iterare, che corrispondono direttamente all'ownership:
+
+<Playground title="Tre modi di iterare">
+```rust
+fn main() {
+    let mut scores = vec![70, 85, 92];
+
+    // iter(): produce &i32, il vettore è solo preso in prestito
+    let best = scores.iter().max();
+    println!("migliore = {best:?}");
+
+    // iter_mut(): produce &mut i32, modifica sul posto
+    for s in scores.iter_mut() {
+        *s += 5;
+    }
+    println!("corretti = {scores:?}");
+
+    // into_iter(): produce i32 per valore e consuma il vettore
+    let labels: Vec<String> = scores.into_iter().map(|s| format!("{s}%")).collect();
+    println!("{labels:?}");
+    // println!("{scores:?}");   // errore: `scores` è stato spostato da into_iter()
+}
+```
+</Playground>
+
+`for x in &v` è una scorciatoia per `v.iter()`, `for x in &mut v` per `v.iter_mut()` e `for x in v` per `v.into_iter()`. Siccome l'iteratore prende in prestito la collezione, non puoi fare push su un `Vec` mentre ci iteri sopra: l'errore di "modifica concorrente" che Java lancia a runtime qui è un errore di compilazione.
+
+<Callout type="compare" from="Java Stream / generatori Python">
+Anche gli stream di Java sono pigri, ma ogni stadio è una chiamata virtuale su un oggetto, e i tipi primitivi richiedono varianti speciali come `IntStream` per evitare il boxing. I generatori di Python sono pigri ma interpretati. Gli adattatori di Rust sono struct generiche: l'intera catena `iter().map().filter().sum()` è un unico tipo concreto, monomorfizzato e messo inline da LLVM in un solo ciclo, spesso vettorizzato automaticamente. I benchmark mostrano regolarmente catene di iteratori alla pari o più veloci dei cicli con indice, perché eliminano anche i controlli sui limiti.
+</Callout>
+
+## Costo zero, in pratica
+
+Queste due funzioni, in una build di release, compilano in codice macchina sostanzialmente identico:
+
+```rust
+fn sum_even_squares_loop(v: &[u64]) -> u64 {
+    let mut total = 0;
+    for i in 0..v.len() {
+        if v[i] % 2 == 0 { total += v[i] * v[i]; }
+    }
+    total
+}
+
+fn sum_even_squares_iter(v: &[u64]) -> u64 {
+    v.iter().filter(|&&x| x % 2 == 0).map(|&x| x * x).sum()
+}
+```
+
+Preferisci la versione con iteratori: esprime l'intenzione, non può uscire dai limiti e lascia più libertà all'ottimizzatore. Passa a un ciclo esplicito quando la logica ha uscite anticipate o uno stato complesso che renderebbe illeggibile la catena.
+
+## Punti chiave
+
+- Le closure catturano per `&`, `&mut` o per valore, scegliendo la modalità meno potente di cui il corpo ha bisogno; `move` forza la cattura per valore.
+- La modalità di cattura decide il trait: `Fn` (condivisa), `FnMut` (mutabile), `FnOnce` (consumante). Nelle tue API accetta il trait più permissivo possibile.
+- Le closure sono struct anonime senza allocazioni sullo heap; restituiscile come `impl Fn` o `Box<dyn Fn>`.
+- Gli adattatori degli iteratori sono pigri: nulla viene eseguito finché un consumatore non estrae i valori, un elemento alla volta lungo tutta la catena.
+- `iter`, `iter_mut` e `into_iter` corrispondono a prendere in prestito, prendere in prestito in modo mutabile e consumare la collezione.
+- Le catene di iteratori vengono monomorfizzate e messe inline in cicli compatti: scrivile per chiarezza, senza pagarne il prezzo.

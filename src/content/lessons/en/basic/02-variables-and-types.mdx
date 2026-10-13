@@ -1,0 +1,210 @@
+---
+title: Variables, types and expressions
+description: Immutable bindings, shadowing, a precise numeric tower, explicit overflow handling and a language where almost everything is an expression.
+duration: 20
+tags: [let, mut, shadowing, integers, overflow, expressions]
+---
+
+Rust's variables and primitive types look like the ones you already know, but three defaults are flipped: bindings are **immutable** unless you say otherwise, numeric conversions are **never implicit**, and blocks, `if` and `match` are **expressions** that produce values. Each of these choices exists to make the code say exactly what it does.
+
+## Bindings are immutable by default
+
+`let` introduces a *binding*: a name attached to a value. Without `mut`, the binding can never be reassigned.
+
+<Playground title="Immutable by default" expectError>
+```rust
+fn main() {
+    let count = 1;
+    count += 1;
+    println!("{count}");
+}
+```
+</Playground>
+
+The compiler answers with `error[E0384]: cannot assign twice to immutable variable` and suggests `let mut count`. This is the opposite of JavaScript, where `let` is mutable and you opt into `const`.
+
+<Compare left="TypeScript">
+```ts
+const limit = 10;      // immutable binding
+let attempts = 0;      // mutable binding
+attempts += 1;
+
+const user = { name: "Ada" };
+user.name = "Grace";   // allowed: const is shallow
+```
+
+```rust
+let limit = 10;          // immutable binding
+let mut attempts = 0;    // mutable binding
+attempts += 1;
+
+let user = User { name: "Ada".into() };
+// user.name = "Grace".into(); // error: not mutable
+```
+</Compare>
+
+Note the last line. In Rust, mutability is a property of the **binding and everything reachable through it**: an immutable `user` means its fields cannot change either. There is no "shallow const". This deep, compiler-checked immutability is what later allows the borrow checker to reason about who may modify what.
+
+### Shadowing
+
+You can declare a new binding with the same name. The old one is *shadowed*, not mutated, and the new one may even have a different type. It is the idiomatic way to refine a value through a few transformation steps without inventing `input2`, `inputTrimmed` and so on.
+
+<Playground title="Shadowing vs mutation">
+```rust
+fn main() {
+    let input = "  42  ";
+    let input = input.trim();                 // &str, shadows the original
+    let input: u32 = input.parse().unwrap();  // now a u32
+    let input = input * 2;                    // still immutable
+    println!("input = {input}");
+
+    let mut total = 0;                        // genuinely mutable state
+    for n in 1..=4 {
+        total += n;
+    }
+    println!("total = {total}");
+}
+```
+</Playground>
+
+Use `mut` when a value really changes over time (an accumulator, a buffer). Use shadowing when each step produces a *new* value derived from the previous one.
+
+### Constants and statics
+
+```rust
+const MAX_RETRIES: u32 = 5;            // inlined at every use, type required
+static GREETING: &str = "hello";        // one fixed address in the binary
+```
+
+`const` is a compile-time value, copied wherever it is used; its initializer must be computable at compile time (`const fn` calls are allowed). `static` has a single memory location for the whole program run. A `static mut` exists but every access requires `unsafe`, because global mutable state is a data race waiting to happen; you will see safe alternatives (`AtomicU64`, `Mutex`, `OnceLock`) in the advanced track.
+
+## A precise numeric tower
+
+Rust has no "number" type and no implicit widening. Every integer type states its size and signedness:
+
+| Size | Signed | Unsigned | Notes |
+| --- | --- | --- | --- |
+| 8 bit | `i8` | `u8` | `u8` is the byte type |
+| 16 bit | `i16` | `u16` | |
+| 32 bit | `i32` | `u32` | default for integer literals |
+| 64 bit | `i64` | `u64` | |
+| 128 bit | `i128` | `u128` | |
+| pointer | `isize` | `usize` | indexes and lengths are `usize` |
+
+Floats are `f32` and `f64` (the default), `bool` is one byte, and `char` is a 4-byte **Unicode scalar value**, not a byte and not a UTF-16 unit. Strings are UTF-8, so `'é'.len_utf8()` is 2 while `size_of::<char>()` is 4.
+
+Conversions are always visible in the code:
+
+```rust
+let small: u8 = 200;
+let wide: u32 = small.into();          // lossless: From<u8> for u32 exists
+let checked = u8::try_from(300u32);    // fallible: Err(TryFromIntError)
+let truncated = 300u32 as u8;          // `as` keeps the low bits: 44
+let half = 7 / 2;                      // 3: integer division
+let ratio = 7 as f64 / 2.0;            // 3.5: you must convert first
+```
+
+<Callout type="compare" from="C / Java">
+`int + long` in C or Java silently widens; `byte b = 300` in some languages silently truncates. In Rust, adding a `u8` to a `u32` is a type error. Prefer `into()` for conversions that cannot lose information and `try_from()` for those that can; reserve `as` for when you really want bit-level truncation or float/int casts.
+</Callout>
+
+## Overflow is a decision you make
+
+What should `250u8 + 10` be? C says "undefined" for signed types and "wrap" for unsigned ones; Java always wraps; Python grows the integer forever. Rust's answer is: **you choose, explicitly**, and the default `+` is treated as a bug if it overflows.
+
+<IntegerExplorer />
+
+Try `i8` with `a = 127, b = 1`: the bit pattern `0111_1111` plus one becomes `1000_0000`, which in two's complement reads as `-128`. Then try `u8` with `250 + 10`.
+
+<Playground title="Four overflow strategies">
+```rust
+fn main() {
+    let a: u8 = 250;
+    let b: u8 = 10;
+    println!("wrapping:    {}", a.wrapping_add(b));      // 4
+    println!("checked:     {:?}", a.checked_add(b));     // None
+    println!("saturating:  {}", a.saturating_add(b));    // 255
+    println!("overflowing: {:?}", a.overflowing_add(b)); // (4, true)
+
+    let min: i8 = -128;
+    println!("{:?}", min.checked_abs());  // None: +128 does not fit in i8
+    println!("{}", -1i8 as u8);           // 255: same bits, new meaning
+}
+```
+</Playground>
+
+- `wrapping_*` for hashes, checksums and ring counters.
+- `checked_*` returns `Option` when overflow means invalid input.
+- `saturating_*` for things like volume, progress or retry counters that should clamp.
+- `overflowing_*` when you need both the wrapped value and the carry flag.
+- `std::num::Wrapping<T>` and `Saturating<T>` wrap a type so that plain `+` follows that policy.
+
+<Callout type="runtime">
+Plain arithmetic compiles to a single CPU instruction in release builds. In debug builds the compiler adds an overflow check after each operation and calls the panic handler if it triggers. The behaviour is controlled by the `overflow-checks` setting of the Cargo profile, so you can keep the checks in production with `[profile.release] overflow-checks = true` at a small cost.
+</Callout>
+
+## Tuples and arrays
+
+Both have a size fixed at compile time and live inline (on the stack, or inside whatever contains them), with no heap allocation.
+
+```rust
+let point: (i32, f64, &str) = (3, 4.5, "origin");
+let (x, y, label) = point;          // destructuring
+let first = point.0;                // positional access
+
+let zeros = [0u8; 4];               // [value; length], type [u8; 4]
+let days = ["mon", "tue", "wed"];   // type [&str; 3]
+let day = days[i];                  // bounds-checked
+```
+
+The length is part of the type: `[u8; 4]` and `[u8; 5]` are different types. Indexing is **always bounds-checked**: an out-of-range index panics instead of reading neighbouring memory. With a constant index the compiler even refuses to build. The empty tuple `()`, called *unit*, is the type of "no meaningful value", similar to `void`.
+
+## Type inference
+
+Inference is local to a function body but works in both directions: a later use can determine an earlier type.
+
+```rust
+let mut ids = Vec::new();         // Vec<?> for now
+ids.push(7u16);                   // ...now it is Vec<u16>
+let n = "12".parse::<i64>()?;     // "turbofish" picks the target type
+let total: u32 = ids.iter().map(|&id| u32::from(id)).sum(); // annotation drives sum()
+```
+
+Function signatures are never inferred: parameters and return types are always written out. That keeps type errors local and makes signatures readable documentation.
+
+## Expressions everywhere
+
+A block `{ … }` evaluates to its last expression, **if that expression has no trailing semicolon**. The semicolon turns an expression into a statement whose value is `()`. That one rule explains why Rust has no ternary operator and why functions usually do not need `return`.
+
+<Playground title="Blocks, if and functions as expressions">
+```rust
+fn square(x: i32) -> i32 {
+    x * x            // no semicolon: this is the return value
+}
+
+fn classify(n: i32) -> &'static str {
+    if n < 0 { "negative" } else if n == 0 { "zero" } else { "positive" }
+}
+
+fn main() {
+    let n = -3;
+    let abs = if n < 0 { -n } else { n };  // no ternary needed
+    let area = {
+        let side = abs + 1;
+        square(side)                       // value of the block
+    };
+    println!("{abs} {area} {}", classify(n));
+}
+```
+</Playground>
+
+Try adding a semicolon after `x * x`: the function body now evaluates to `()`, and the compiler reports `mismatched types: expected i32, found ()`, pointing at the semicolon and suggesting you remove it. Loops are expressions too: `let found = loop { … break value; };` returns a value from a `loop`.
+
+## Key takeaways
+
+- `let` is immutable and deep; add `mut` only where state genuinely changes.
+- Shadowing creates a new binding, possibly of a new type: ideal for parse-and-refine steps.
+- Every integer type names its width; there are no implicit conversions. Use `into`, `try_from`, and `as` deliberately.
+- Overflow panics in debug and wraps in release; when it matters, pick `wrapping_`, `checked_`, `saturating_` or `overflowing_` explicitly.
+- Arrays and tuples are fixed-size and stack-friendly; indexing is always bounds-checked.
+- Blocks, `if`, `match` and `loop` are expressions; a trailing semicolon turns a value into `()`.

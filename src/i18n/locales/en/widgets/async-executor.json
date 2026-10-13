@@ -1,0 +1,32 @@
+{
+  "title": "Inside an async executor",
+  "subtitle": "Three tasks, one thread: poll, Pending, wake, poll again",
+  "zones": { "queue": "Ready queue", "executor": "Executor · 1 thread", "reactor": "Reactor (I/O)" },
+  "states": ["Start", "await #1", "await #2", "Done"],
+  "task": "Task",
+  "thread": "Thread",
+  "idle": "park",
+  "pending": "Pending",
+  "ready": "Ready",
+  "prev": "Back",
+  "next": "Step",
+  "play": "Play",
+  "pause": "Pause",
+  "reset": "Reset",
+  "captions": [
+    "Three tasks are <strong>spawned</strong>. Nothing has run yet: a future is an inert state machine until somebody polls it. All three sit in the ready queue.",
+    "The executor <code>poll</code>s task A. It runs until its first <code>.await</code> on a socket that has no data, so it returns <code>Poll::Pending</code>. Before returning, the socket future hands its <code>Waker</code> to the reactor.",
+    "Same for task B: it runs up to <code>await #1</code>, registers its waker and yields. The thread never blocks inside a task, it moves on.",
+    "Task C is polled and also parks on I/O. The ready queue is empty, so the executor thread goes to sleep (in Tokio, inside <code>epoll_wait</code>/<code>kqueue</code>).",
+    "Data arrives for B. The reactor calls <code>waker.wake()</code>, which pushes B back onto the ready queue and wakes the executor thread.",
+    "B is polled again. The state machine resumes exactly after <code>await #1</code>, runs to <code>await #2</code> and returns <code>Pending</code> once more.",
+    "A's I/O completes: its waker re-queues it. Note that the order of completion is decided by the outside world, not by spawn order.",
+    "A resumes from <code>await #1</code> and suspends at <code>await #2</code>. Its local variables live inside the future itself, not on a thread stack.",
+    "Two events at once: C and B are both woken and queued. Waking is cheap: it is just a pointer pushed onto a queue.",
+    "C resumes after <code>await #1</code> and reaches <code>await #2</code>, which is not ready yet: <code>Pending</code>.",
+    "B is polled, its last <code>.await</code> is ready, the function returns: <code>Poll::Ready(value)</code>. B is finished and its memory is freed.",
+    "The remaining I/O completes and A and C are woken together.",
+    "A completes with <code>Poll::Ready</code>.",
+    "C completes. Three concurrent tasks ran on <strong>one</strong> thread, which was busy only while there was actual work to do."
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "title": "Scope e prestiti",
+  "subtitle": "Ogni barra indica quanto vive un valore o per quanto un prestito deve restare valido",
+  "presets": [
+    { "label": "Valido", "text": "<code>s</code> vive fino alla fine di <code>main</code>. Il prestito <code>r</code> viene usato l'ultima volta alla riga 4, ben dentro quella regione: il compilatore è soddisfatto." },
+    { "label": "Pendente", "text": "<code>x</code> viene rilasciato alla fine del blocco interno (riga 6), ma <code>r</code> è ancora usato alla riga 7. La parte rossa del prestito sopravvive al valore a cui punta." },
+    { "label": "longest()", "text": "<code>'a</code> deve stare dentro <em>entrambi</em> gli input. <code>b</code> viene rilasciato alla fine del blocco (riga 11), eppure <code>res</code> (che porta <code>'a</code>) viene usato alla riga 12." }
+  ],
+  "legendValue": "valore vivo",
+  "legendBorrow": "prestito necessario",
+  "legendInvalid": "sopravvive al valore",
+  "ok": "Compila",
+  "hover": "Passa sopra (o metti il focus su) una barra per evidenziarne le righe."
+}

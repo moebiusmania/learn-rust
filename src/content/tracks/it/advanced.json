@@ -1,0 +1,14 @@
+{
+  "title": "Avanzato",
+  "tagline": "Fino al metallo",
+  "summary": "Concorrenza senza paura, async, layout della memoria, unsafe e FFI, macro, il runtime minimo e l'ottimizzazione delle prestazioni.",
+  "intro": "Questo percorso apre il cofano. Vedrai come il sistema dei tipi rende sicuri i thread, in cosa viene compilata davvero una async fn, come sono disposti i valori in memoria, dove si colloca unsafe, come le macro generano codice e quanto poco runtime si porta dietro un binario Rust.",
+  "concepts": [
+    { "title": "Send e Sync", "text": "Due marker trait, derivati automaticamente dal compilatore, decidono quali tipi possono passare da un thread all'altro o essere condivisi. I data race diventano errori di tipo." },
+    { "title": "Async senza runtime", "text": "Una async fn viene compilata in una macchina a stati che implementa Future. Il linguaggio non include un executor: ne scegli uno (Tokio, smol, embassy) come libreria." },
+    { "title": "Il layout lo decide il compilatore", "text": "Se non chiedi repr(C), il compilatore riordina i campi e sfrutta le nicchie, per cui Option<&T> ha la stessa dimensione di un puntatore." },
+    { "title": "Unsafe è un contratto", "text": "unsafe non disattiva i controlli. Sblocca cinque operazioni specifiche e ti rende responsabile di invarianti che il compilatore non può verificare." },
+    { "title": "Codice che scrive codice", "text": "Le macro dichiarative fanno pattern matching sui token; le macro procedurali sono plugin del compilatore che ricevono e restituiscono flussi di token." },
+    { "title": "Un runtime minuscolo", "text": "Niente GC, niente green thread, niente reflection. Un binario Rust contiene uno shim di avvio, un allocatore e un gestore dei panic, e con no_std si possono togliere anche quelli." }
+  ]
+}

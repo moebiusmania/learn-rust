@@ -1,0 +1,324 @@
+---
+title: Struct, enum e pattern matching
+description: Dati senza classi, enum che trasportano dati, Option al posto di null e un match di cui il compilatore verifica la completezza.
+duration: 25
+tags: [struct, impl, enum, Option, match, pattern]
+---
+
+Rust non ha classi, né ereditarietà, né `null`. Al loro posto offre una netta separazione tra **dati** (`struct` ed `enum`) e **comportamento** (blocchi `impl` e trait), più un motore di pattern matching di cui il compilatore verifica la completezza. Insieme sostituiscono un numero sorprendente di design pattern della programmazione a oggetti.
+
+## Struct: tre forme di dati
+
+Una `struct` è un semplice aggregato di campi. Non ha header nascosti, né puntatori a vtable, né un'identità oltre ai suoi byte: una struct con due `u32` occupa esattamente 8 byte.
+
+- **Struct con campi nominati**, il caso più comune: `struct User { name: String, age: u32 }`.
+- **Tuple struct**, con campi posizionali: `struct Meters(f64);`. Con un solo campo si chiamano *newtype* e sono un modo a costo zero per non confondere metri e secondi.
+- **Unit struct**, senza alcun campo: `struct Marker;`. Occupano zero byte e sono utili come marcatori a livello di tipo.
+
+## I metodi vivono nei blocchi impl
+
+Il comportamento si aggiunge con uno o più blocchi `impl`, separati dalla definizione dei dati. Il primo parametro di un metodo, il **receiver**, dice cosa fa il metodo con il valore, ed è parte del contratto dell'API:
+
+| Receiver | Significato | Equivalente più vicino |
+| --- | --- | --- |
+| `&self` | Legge il valore tramite un borrow condiviso | Un metodo `const` in C++ |
+| `&mut self` | Modifica il valore tramite un borrow esclusivo | Un normale metodo su un oggetto mutabile |
+| `self` | Consuma il valore: il chiamante non può più usarlo | Nessun equivalente diffuso |
+| *(nessuno)* | Funzione associata, chiamata come `Type::name()` | Un metodo `static` |
+
+Non esistono costruttori. Per convenzione è una funzione associata chiamata `new` (o con un nome più descrittivo) a costruire il valore, e `Self` è un alias del tipo che si sta implementando.
+
+<Playground title="Struct e metodi">
+```rust
+#[derive(Debug, Clone, PartialEq)]
+struct Rectangle {
+    width: u32,
+    height: u32,
+}
+
+impl Rectangle {
+    // Funzione associata: niente `self`, si chiama con Rectangle::square(...)
+    fn square(size: u32) -> Self {
+        Self { width: size, height: size }
+    }
+
+    // &self: borrow condiviso, in sola lettura
+    fn area(&self) -> u32 {
+        self.width * self.height
+    }
+
+    // &mut self: borrow esclusivo e mutabile
+    fn scale(&mut self, factor: u32) {
+        self.width *= factor;
+        self.height *= factor;
+    }
+
+    // self: prende l'ownership, il valore viene consumato
+    fn into_tuple(self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+struct Meters(f64); // tuple struct, un "newtype"
+struct Marker;      // unit struct, nessun dato
+
+fn main() {
+    let mut r = Rectangle { width: 3, height: 4 };
+    println!("{r:?} has area {}", r.area());
+
+    r.scale(2);
+    let wide = Rectangle { width: 20, ..r.clone() }; // sintassi di aggiornamento della struct
+    println!("{r:?} vs {wide:?}, equal: {}", r == wide);
+    println!("square: {:?}", Rectangle::square(5));
+
+    let (w, h) = r.into_tuple();
+    println!("w = {w}, h = {h}");
+    // println!("{r:?}"); // error[E0382]: r è stato spostato da into_tuple
+
+    let distance = Meters(42.0);
+    let _marker = Marker;
+    println!("{} m; Marker occupa {} byte", distance.0, std::mem::size_of::<Marker>());
+}
+```
+</Playground>
+
+Togli il commento all'ultimo `println!` di `r` e vedrai il compilatore rifiutare un uso dopo che `into_tuple` lo ha consumato. `#[derive(Debug, Clone, PartialEq)]` chiede al compilatore di generare le implementazioni standard per stampa, copia profonda e confronto: niente viene implementato implicitamente, nemmeno l'uguaglianza.
+
+<Callout type="runtime">
+Una chiamata di metodo è solo una chiamata di funzione con una sintassi più comoda: `r.area()` viene compilato in `Rectangle::area(&r)`, risolto staticamente. Non c'è dispatch dinamico a meno che tu non lo chieda esplicitamente con i trait object (percorso intermedio). A differenza di Java o C#, i valori **non hanno un header di oggetto**: un array di un milione di `Rectangle` è fatto di 8 MB di coppie di `u32` contigue, senza un'allocazione per oggetto e senza inseguire puntatori.
+</Callout>
+
+## Gli enum sono tipi di dato algebrici
+
+In C, Java o TypeScript un `enum` è un insieme di costanti con un nome. In Rust ogni variante può trasportare **i propri dati**, con una propria forma. È un *sum type*: un `Message` è esattamente una di queste varianti, e quale sia viene registrato in un piccolo tag nascosto.
+
+<Compare left="TypeScript">
+```ts
+type Message =
+  | { kind: "quit" }
+  | { kind: "move"; x: number; y: number }
+  | { kind: "write"; text: string }
+  | { kind: "color"; r: number; g: number; b: number };
+
+function describe(m: Message): string {
+  switch (m.kind) {
+    case "quit": return "quit";
+    case "move": return `move to (${m.x}, ${m.y})`;
+    case "write": return `write ${m.text}`;
+    case "color": return `color ${m.r},${m.g},${m.b}`;
+  }
+}
+```
+
+```rust
+enum Message {
+    Quit,
+    Move { x: i32, y: i32 },
+    Write(String),
+    ChangeColor(u8, u8, u8),
+}
+
+fn describe(m: &Message) -> String {
+    match m {
+        Message::Quit => "quit".into(),
+        Message::Move { x, y } => format!("move to ({x}, {y})"),
+        Message::Write(text) => format!("write {text}"),
+        Message::ChangeColor(r, g, b) => format!("color {r},{g},{b}"),
+    }
+}
+```
+</Compare>
+
+La versione TypeScript è una convenzione imposta dal type checker sopra a semplici oggetti. In Rust il tag fa parte del valore, il contenuto si raggiunge solo facendo match su di esso e la dimensione dell'enum è quella della sua variante più grande più il tag.
+
+### Option al posto di null
+
+L'errore da un miliardo di dollari si risolve con un normale enum della libreria standard:
+
+```rust
+enum Option<T> {
+    None,
+    Some(T),
+}
+```
+
+Una funzione che potrebbe non trovare un utente restituisce `Option<&str>`, non un `&str` che potrebbe essere segretamente null. *Non puoi* chiamare metodi delle stringhe su un `Option<&str>`: prima devi decidere cosa succede nel caso `None`, con un match o con helper come `unwrap_or`, `map` e `?` (prossima lezione).
+
+<Playground title="Enum con dati e Option">
+```rust
+#[derive(Debug)]
+enum Message {
+    Quit,
+    Move { x: i32, y: i32 },
+    Write(String),
+    ChangeColor(u8, u8, u8),
+}
+
+impl Message {
+    fn describe(&self) -> String {
+        match self {
+            Message::Quit => "quit".to_string(),
+            Message::Move { x, y } => format!("move to ({x}, {y})"),
+            Message::Write(text) => format!("write {text:?}"),
+            Message::ChangeColor(r, g, b) => format!("color #{r:02x}{g:02x}{b:02x}"),
+        }
+    }
+}
+
+fn find_user(id: u32) -> Option<&'static str> {
+    match id {
+        1 => Some("ada"),
+        2 => Some("linus"),
+        _ => None,
+    }
+}
+
+fn main() {
+    let inbox = vec![
+        Message::Move { x: 3, y: -1 },
+        Message::Write(String::from("hi")),
+        Message::ChangeColor(255, 128, 0),
+        Message::Quit,
+    ];
+    for msg in &inbox {
+        println!("{}", msg.describe());
+    }
+
+    for id in [1, 7] {
+        // Un Option<&str> non è un &str: prima va gestito None.
+        let name = find_user(id).unwrap_or("anonimo");
+        println!("utente {id}: {name}");
+    }
+
+    println!(
+        "&str: {} byte, Option<&str>: {} byte",
+        std::mem::size_of::<&str>(),
+        std::mem::size_of::<Option<&str>>()
+    );
+}
+```
+</Playground>
+
+<Callout type="runtime" title="Option è gratis per i riferimenti">
+L'ultima riga stampa due volte la stessa dimensione. Un riferimento non può mai essere null, quindi il compilatore usa la configurazione di bit tutta a zero, altrimenti impossibile, per rappresentare `None`. Grazie a questa **niche optimization**, `Option<&T>`, `Option<Box<T>>` e `Option<NonZeroU32>` non costano nulla rispetto al tipo grezzo: ottieni la sicurezza rispetto a null con esattamente la stessa rappresentazione in memoria di un puntatore nullable in C.
+</Callout>
+
+## Il match deve essere esaustivo
+
+`match` confronta un valore con dei pattern dall'alto verso il basso ed esegue il primo ramo che corrisponde. È un'espressione, quindi ogni ramo deve produrre lo stesso tipo. La proprietà fondamentale è l'**esaustività**: se un valore possibile non ha un ramo, il programma non compila. Prova tu:
+
+<MatchExhaustiveness />
+
+È questo che rende gli enum così utili per modellare stati. Aggiungi una variante `Message::Resize` il mese prossimo e il compilatore elencherà ogni `match` del codice che va aggiornato. Uno `switch` con un ramo `default` in Java o un `case` mancante in JavaScript farebbero invece silenziosamente la cosa sbagliata.
+
+L'analisi funziona con qualsiasi tipo, non solo con gli enum. Il compilatore ragiona anche sugli intervalli di interi:
+
+<Playground title="Un buco negli intervalli di interi" expectError>
+```rust
+fn sign(n: i32) -> &'static str {
+    match n {
+        i32::MIN..=-1 => "negative",
+        1..=i32::MAX => "positive",
+    }
+}
+
+fn main() {
+    println!("{}", sign(-5));
+}
+```
+</Playground>
+
+L'errore indica con precisione il valore mancante: `0_i32` not covered.
+
+## I pattern sono un piccolo linguaggio
+
+I pattern compaiono nel `match`, ma anche in `let`, nei parametri delle funzioni e nei cicli `for`. Gli elementi principali:
+
+- **Letterali e intervalli**: `0`, `'a'..='z'`, `400..=499`.
+- **Destrutturazione**: `Point { x, y }`, `(a, b)`, `[first, .., last]`, `Some(inner)`, annidati quanto vuoi.
+- **Caratteri jolly**: `_` ignora un valore, `..` ignora i campi o gli elementi rimanenti.
+- **Or-pattern**: `A | B`, purché entrambi i lati leghino gli stessi nomi.
+- **Binding**: `n @ 1..=9` verifica un pattern *e* conserva il valore.
+- **Guardie**: `if condizione` dopo un pattern aggiunge un controllo booleano arbitrario. Le guardie non vengono considerate per l'esaustività, come mostra il widget qui sopra.
+
+<Playground title="Pattern, guardie e binding">
+```rust
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn classify(p: Point) -> String {
+    match p {
+        Point { x: 0, y: 0 } => "origine".into(),
+        Point { x, y: 0 } | Point { x: 0, y: x } => format!("su un asse, in {x}"),
+        Point { x, y } if x == y => format!("sulla diagonale, in {x}"),
+        Point { x: n @ 1..=9, y } => format!("x piccola = {n}, y = {y}"),
+        Point { x, .. } if x < 0 => "semipiano sinistro".into(),
+        _ => "da qualche altra parte".into(),
+    }
+}
+
+fn main() {
+    let samples = [(0, 0), (5, 0), (0, -3), (4, 4), (7, 2), (-2, 9), (20, 1)];
+    for (x, y) in samples {
+        println!("({x:>3}, {y:>3}) -> {}", classify(Point { x, y }));
+    }
+
+    // La destrutturazione funziona anche in let, nei parametri e nei cicli for
+    let ((a, b), [first, .., last]) = ((1, 2), [10, 20, 30, 40]);
+    println!("a={a} b={b} first={first} last={last}");
+}
+```
+</Playground>
+
+L'ordine dei rami conta: `(0, 0)` corrisponderebbe anche al ramo degli assi, ma vince il primo ramo che corrisponde. Scambia i primi due rami e il compilatore segnalerà che il ramo dell'origine è irraggiungibile.
+
+## if let e let else
+
+Quando ti interessa un solo pattern, un `match` completo è prolisso. Esistono due forme più brevi:
+
+- `if let Some(x) = value { … } else { … }` esegue un blocco solo se il pattern corrisponde.
+- `let Some(x) = value else { return …; };` lega le variabili nello scope *corrente* e richiede che il blocco `else` diverga (`return`, `break`, `continue` o panic). È la "guard clause" idiomatica e mantiene il percorso principale senza indentazione.
+
+<Playground title="if let e let else">
+```rust
+fn parse_kv(line: &str) -> Option<(&str, i64)> {
+    // let-else: assegna se il pattern corrisponde, altrimenti il blocco else deve divergere
+    let Some((key, raw)) = line.split_once('=') else {
+        return None;
+    };
+    let Ok(value) = raw.trim().parse::<i64>() else {
+        return None;
+    };
+    Some((key.trim(), value))
+}
+
+fn main() {
+    for line in ["port = 8080", "debug", "retries = three", "timeout=30"] {
+        if let Some((key, value)) = parse_kv(line) {
+            println!("{key:<8} -> {value}");
+        } else {
+            println!("ignorata {line:?}");
+        }
+    }
+
+    // matches! è una scorciatoia booleana per un singolo pattern
+    let status = 404;
+    println!("errore del client? {}", matches!(status, 400..=499));
+}
+```
+</Playground>
+
+<Callout type="compare" from="Java / C#">
+Java moderno (sealed interface + record + pattern matching nello `switch`) e C# (record + switch expression) stanno convergendo sulla stessa idea. La differenza è che in Rust questo è il modo *predefinito* di modellare i dati, la libreria standard è costruita su di esso (`Option`, `Result`, `Ordering`, `Cow`) e gli enum sono valori sullo stack, senza allocazioni per variante.
+</Callout>
+
+## Punti chiave
+
+- Dati (`struct`, `enum`) e comportamento (`impl`) si dichiarano separatamente; non ci sono classi, costruttori né ereditarietà.
+- Il receiver di un metodo (`&self`, `&mut self`, `self`) documenta se legge, modifica o consuma il valore.
+- Le varianti degli enum trasportano dati, il che rende gli enum dei sum type: un valore è esattamente una variante.
+- `Option<T>` sostituisce null e, per riferimenti e box, non costa memoria aggiuntiva.
+- `match` deve essere esaustivo; le guardie non contano, i caratteri jolly zittiscono i warning futuri.
+- `if let` e `let else` gestiscono il caso con un solo pattern senza annidamenti.

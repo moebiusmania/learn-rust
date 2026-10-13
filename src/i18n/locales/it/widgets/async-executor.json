@@ -1,0 +1,32 @@
+{
+  "title": "Dentro un executor async",
+  "subtitle": "Tre task, un thread: poll, Pending, wake, di nuovo poll",
+  "zones": { "queue": "Coda dei pronti", "executor": "Executor · 1 thread", "reactor": "Reactor (I/O)" },
+  "states": ["Inizio", "await #1", "await #2", "Fatto"],
+  "task": "Task",
+  "thread": "Thread",
+  "idle": "park",
+  "pending": "Pending",
+  "ready": "Ready",
+  "prev": "Indietro",
+  "next": "Avanti",
+  "play": "Avvia",
+  "pause": "Pausa",
+  "reset": "Ripristina",
+  "captions": [
+    "Vengono creati (<strong>spawn</strong>) tre task. Non è ancora stato eseguito nulla: una future è una macchina a stati inerte finché qualcuno non la interroga con <code>poll</code>. Tutti e tre sono nella coda dei pronti.",
+    "L'executor chiama <code>poll</code> sul task A. Il task gira fino al suo primo <code>.await</code> su un socket senza dati, quindi restituisce <code>Poll::Pending</code>. Prima di tornare, la future del socket consegna il proprio <code>Waker</code> al reactor.",
+    "Lo stesso per il task B: arriva fino ad <code>await #1</code>, registra il suo waker e cede il controllo. Il thread non si blocca mai dentro un task, passa oltre.",
+    "Anche il task C viene interrogato e si ferma in attesa di I/O. La coda dei pronti è vuota, quindi il thread dell'executor si addormenta (in Tokio, dentro <code>epoll_wait</code>/<code>kqueue</code>).",
+    "Arrivano dati per B. Il reactor chiama <code>waker.wake()</code>, che rimette B nella coda dei pronti e risveglia il thread dell'executor.",
+    "B viene interrogato di nuovo. La macchina a stati riprende esattamente dopo <code>await #1</code>, arriva ad <code>await #2</code> e restituisce di nuovo <code>Pending</code>.",
+    "L'I/O di A si completa: il suo waker lo rimette in coda. L'ordine di completamento lo decide il mondo esterno, non l'ordine di spawn.",
+    "A riprende da <code>await #1</code> e si sospende su <code>await #2</code>. Le sue variabili locali vivono dentro la future stessa, non sullo stack di un thread.",
+    "Due eventi insieme: C e B vengono svegliati e messi in coda. Svegliare costa poco: è solo un puntatore inserito in una coda.",
+    "C riprende dopo <code>await #1</code> e arriva ad <code>await #2</code>, che non è ancora pronto: <code>Pending</code>.",
+    "B viene interrogato, il suo ultimo <code>.await</code> è pronto e la funzione restituisce <code>Poll::Ready(valore)</code>. B ha finito e la sua memoria viene liberata.",
+    "L'I/O rimanente si completa e A e C vengono svegliati insieme.",
+    "A termina con <code>Poll::Ready</code>.",
+    "C termina. Tre task concorrenti hanno girato su <strong>un solo</strong> thread, occupato solo quando c'era davvero lavoro da fare."
+  ]
+}

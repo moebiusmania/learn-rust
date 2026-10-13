@@ -1,0 +1,293 @@
+---
+title: Il runtime, RAII e l'ordine dei drop
+description: Cosa si porta dietro un binario Rust a runtime, come fanno unwinding i panic e le regole esatte che decidono quando girano i distruttori.
+duration: 25
+tags: [runtime, Drop, RAII, panic, no_std]
+---
+
+"Rust non ha runtime" è uno slogan utile e un'affermazione leggermente sbagliata. Non ci sono garbage collector, macchina virtuale, scheduler o reflection. Però ogni binario Rust contiene comunque qualche centinaio di righe di codice di supporto, e il "comportamento a runtime" più importante non è codice che linki: sono le **chiamate ai distruttori che il compilatore inserisce** al posto tuo. Questa lezione guarda entrambe le cose.
+
+## Cosa gira prima di main
+
+Quando il sistema operativo avvia un eseguibile Rust, non salta direttamente nel tuo `main`. Il runtime C chiama il vero punto di ingresso generato da `rustc`, che chiama `std::rt::lang_start`. A grandi linee:
+
+1. Salva `argc`/`argv`, così `std::env::args()` potrà leggerli più tardi.
+2. Su Unix installa una **guardia contro lo stack overflow**: una pagina protetta più un gestore di segnali, così un overflow dello stack stampa un messaggio chiaro invece di corrompere la memoria.
+3. Imposta il nome e il thread-local storage del thread principale.
+4. Chiama il tuo `main`, dentro un confine che intercetta un eventuale panic che ne esce.
+5. Converte il risultato in un codice di uscita: `0` in caso di successo, `1` se `main` restituisce un `Err` (può restituire un `Result`), oppure `101` dopo un panic.
+
+Confrontalo con l'avvio della JVM, del CLR di .NET o dell'event loop di Node.js. Niente caricamento di classi, niente riscaldamento del JIT, nessun heap da dimensionare: un binario Rust è pronto a lavorare in pochi microsecondi.
+
+<Callout type="runtime">
+Gli altri pezzi di "runtime" sono: l'**allocatore globale** (di default `malloc`/`free` di sistema, sostituibile con `#[global_allocator]`), il **meccanismo dei panic** (il panic hook che stampa il messaggio e, con l'unwinding, le tabelle e la personality routine che risalgono lo stack) e le primitive di thread-local e sincronizzazione che `std` usa sulla tua piattaforma. Executor async, green thread e garbage collection sono librerie che scegli tu, non parti del linguaggio.
+</Callout>
+
+Puoi sostituire l'allocatore con una decina di righe. Questo avvolge l'allocatore di sistema e conta le chiamate, così è facile vedere quali operazioni toccano lo heap:
+
+<Playground title="Un allocatore globale che conta">
+```rust
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Avvolge l'allocatore di sistema e conta ogni allocazione.
+struct Counting;
+
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: Counting = Counting;
+
+fn count<T>(label: &str, f: impl FnOnce() -> T) -> T {
+    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let value = f();
+    let after = ALLOCATIONS.load(Ordering::Relaxed);
+    println!("{label:<28} {} allocazioni", after - before);
+    value
+}
+
+fn main() {
+    count("aritmetica intera", || 6 * 7);
+    count("array sullo stack", || [0u64; 1024]);
+    count("Vec::with_capacity(1000)", || Vec::<u64>::with_capacity(1000));
+    count("collect di 1000 elementi", || (0..1000u64).collect::<Vec<_>>());
+    count("format! di una String", || format!("{} elementi", 1000));
+}
+```
+</Playground>
+
+È così che i progetti adottano allocatori come jemalloc o mimalloc per aumentare il throughput, e il codice embedded ne fornisce uno proprio sopra una regione di memoria fissa.
+
+## RAII: distruttori che non chiami mai
+
+Rust usa il **RAII** (Resource Acquisition Is Initialization), l'idea resa celebre dal C++: un valore che possiede una risorsa la rilascia nel proprio distruttore, e il distruttore viene eseguito automaticamente quando il proprietario esce dallo scope. In Rust il distruttore è il trait `Drop`:
+
+```rust
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.socket.shutdown();
+    }
+}
+```
+
+`Vec`, `String`, `Box`, `File`, `MutexGuard`, `TcpStream`: tutti liberano memoria, chiudono handle o rilasciano lock nel proprio `drop`. Dato che l'ownership è tracciata staticamente, il compilatore sa esattamente dove muore ogni valore e inserisce lì la chiamata. Non c'è una coda di finalizer e non c'è un "prima o poi".
+
+<Compare left="Java / Python">
+```java
+// try-with-resources: solo per AutoCloseable,
+// solo se chi chiama si ricorda di usarlo
+try (var file = new FileReader("data.txt")) {
+    process(file);
+} // file.close() qui
+
+// Senza, il GC *potrebbe* finalizzare l'oggetto
+// in un momento successivo non specificato.
+```
+
+```rust
+// Ogni valore che possiede qualcosa è una "risorsa".
+{
+    let file = File::open("data.txt")?;
+    process(&file);
+} // file rilasciato (chiuso) qui, sempre
+
+// Return anticipato, `?` o un panic con unwinding:
+// la chiusura avviene comunque, in un ordine noto.
+```
+</Compare>
+
+## Le regole dell'ordine dei drop
+
+Visto che i distruttori possono avere effetti osservabili (stampare, svuotare buffer, sbloccare), Rust ne specifica l'ordine con precisione:
+
+1. Le **variabili locali** vengono rilasciate alla fine del loro scope in **ordine inverso di dichiarazione**: l'ultima creata è la prima distrutta. Una variabile successiva può prendere in prestito una precedente, quindi deve andarsene prima.
+2. Il `Drop::drop` di un valore gira **prima** che vengano rilasciati i suoi campi, così il distruttore può ancora usarli.
+3. I **campi delle struct** vengono poi rilasciati in **ordine di dichiarazione** (non inverso). Lo stesso vale per gli elementi di tuple e array, dal primo all'ultimo, e per gli elementi di un `Vec`.
+4. I **temporanei** creati dentro un'istruzione-espressione vengono rilasciati alla fine dell'istruzione, al `;`.
+5. Un valore **spostato** (moved) non viene rilasciato nella posizione originale; se ne occupa il suo nuovo proprietario.
+
+Scorri i quattro preset. Il log a destra è esattamente ciò che stampa il programma:
+
+<DropOrder />
+
+Esegui il programma vero per verificare i primi tre preset. Il tipo `Noisy` si limita a stampare il proprio nome nel `drop`:
+
+<Playground title="L'ordine dei drop, verificato">
+```rust
+#![allow(unused_variables, dead_code)]
+
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+struct Pair {
+    first: Noisy,
+    second: Noisy,
+}
+
+impl Drop for Pair {
+    fn drop(&mut self) {
+        println!("drop Pair");
+    }
+}
+
+fn nested_scopes() {
+    let a = Noisy("a");
+    {
+        let b = Noisy("b");
+        let c = Noisy("c");
+    }
+    let d = Noisy("d");
+}
+
+fn struct_fields() {
+    let x = Noisy("x");
+    let p = Pair { first: Noisy("first"), second: Noisy("second") };
+}
+
+fn vec_items() {
+    let v = vec![Noisy("v0"), Noisy("v1"), Noisy("v2")];
+    let t = Noisy("t");
+}
+
+fn main() {
+    println!("-- scope annidati");
+    nested_scopes();
+    println!("-- campi di struct");
+    struct_fields();
+    println!("-- elementi di un Vec");
+    vec_items();
+}
+```
+</Playground>
+
+## Panic: unwind o abort
+
+Un panic segnala un **bug**: un indice fuori dai limiti, un `unwrap()` su `None`, un'asserzione fallita. I fallimenti recuperabili appartengono a `Result`. Quando avviene un panic, la strategia di default è l'**unwinding**: il panic hook stampa il messaggio, poi il runtime risale lo stack delle chiamate eseguendo ogni distruttore in ogni frame, finché non raggiunge il confine del thread. Per il thread principale questo termina il processo con codice di uscita 101.
+
+<Playground title="I distruttori girano durante l'unwinding">
+```rust
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+fn inner() {
+    let _g = Noisy("inner guard");
+    panic!("boom");
+}
+
+fn main() {
+    let _m = Noisy("main guard");
+    inner();
+    println!("never printed");
+}
+```
+</Playground>
+
+L'unwinding è il motivo per cui un `MutexGuard` rilascia comunque il lock e un `BufWriter` svuota comunque il buffer quando qualcosa va storto. Ha un costo: il compilatore genera **landing pad** e tabelle di unwinding per ogni funzione che possiede valori con distruttori. Nel `Cargo.toml` puoi scegliere l'alternativa:
+
+```toml
+[profile.release]
+panic = "abort"   # niente unwinding: stampa il messaggio e termina il processo
+```
+
+Con `abort` i binari diventano più piccoli e il codice un po' più compatto, ma i distruttori non girano in caso di panic e `std::panic::catch_unwind` non intercetta più nulla. Molti server mantengono l'unwinding, così un panic in un singolo handler (sul suo thread o task) non abbatte l'intero processo; molte CLI e molti target embedded scelgono abort.
+
+<Callout type="warn" title="catch_unwind non è try/catch">
+`std::panic::catch_unwind` esiste per fermare un panic a un confine FFI (fare unwinding dentro codice C è undefined behaviour) o al bordo di un thread pool. Non è un meccanismo di eccezioni: funziona solo con `panic = "unwind"`, e il codice che ci si appoggia per il flusso di controllo cambierà comportamento in silenzio quando qualcuno passerà ad abort.
+</Callout>
+
+## Controllare la distruzione
+
+A volte devi far finire prima la vita di un valore, oppure mai:
+
+<Playground title="drop, forget, ManuallyDrop, leak">
+```rust
+use std::mem::ManuallyDrop;
+use std::panic;
+
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+fn main() {
+    let _ = Noisy("underscore");      // `_` non lega nulla: rilasciato subito
+    let _kept = Noisy("_kept");       // `_kept` è un binding: vive fino alla fine
+    let len = Noisy("temporary").0.len(); // temporaneo rilasciato al `;`
+    println!("len = {len}");
+
+    let early = Noisy("early");
+    drop(early);                      // std::mem::drop prende solo l'ownership
+
+    std::mem::forget(Noisy("forgotten"));          // il distruttore non gira mai
+    let _manual = ManuallyDrop::new(Noisy("manual")); // idem, come tipo wrapper
+
+    let leaked: &'static mut Vec<i32> = Box::leak(Box::new(vec![1, 2, 3]));
+    leaked.push(4);
+    println!("leaked = {leaked:?}");
+
+    let result = panic::catch_unwind(|| {
+        let _guard = Noisy("guard");
+        panic!("boom");
+    });
+    println!("panic intercettato: {}", result.is_err());
+    println!("fine di main");
+}
+```
+</Playground>
+
+- `drop(x)` non è magia: `std::mem::drop` è una funzione vuota che prende l'ownership, quindi il valore muore quando la funzione ritorna. Usala per rilasciare un lock o chiudere un file prima della fine dello scope.
+- `let _ = expr;` **non lega nulla**, quindi il valore viene rilasciato subito. `let _guard = expr;` crea un binding e lo mantiene in vita. Confondere i due è un bug classico con le guardie dei lock.
+- `std::mem::forget` e `ManuallyDrop` saltano il distruttore. Sono entrambi safe: perdere memoria (leak) non viola la memory safety, di solito è solo un errore. `ManuallyDrop` è lo strumento preferito dentro le strutture dati `unsafe`.
+- `Box::leak` rinuncia di proposito all'ownership e restituisce un `&'static mut`. È un modo legittimo per creare una configurazione globale che vive per tutto il programma.
+
+Non puoi chiamare direttamente `x.drop()`; il compilatore lo rifiuta, proprio perché un valore non venga mai distrutto due volte.
+
+## no_std: togliere del tutto il runtime
+
+Per microcontrollori, kernel, bootloader e moduli WebAssembly, un crate può rinunciare alla libreria standard con `#![no_std]`. A quel punto linka solo **core** (tipi, trait, iteratori, `Option`, `Result`, slice: tutto ciò che non richiede un sistema operativo) e, se vuoi, **alloc** (`Vec`, `String`, `Box`), una volta fornito un allocatore globale.
+
+```rust
+#![no_std]
+#![no_main]
+
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    loop {} // es. far lampeggiare un LED, resettare il chip
+}
+```
+
+In un binario `no_std` il gestore dei panic lo scrivi tu e il punto di ingresso arriva dal crate di supporto del tuo hardware. Ownership, borrowing, trait e `Drop` funzionano esattamente allo stesso modo, ed è una parte importante del motivo per cui Rust sta guadagnando terreno nei sistemi embedded, dove il C regna da decenni.
+
+## Punti chiave
+
+- Un binario Rust si porta dietro un runtime minuscolo: una routine di avvio, l'allocatore globale e il meccanismo dei panic. Niente GC, niente VM, niente reflection.
+- Il RAII tramite `Drop` rilascia memoria, file e lock in un punto fissato dal codice sorgente.
+- Le variabili locali vengono rilasciate in ordine inverso di dichiarazione; il `Drop::drop` di un valore gira prima dei suoi campi, che vengono rilasciati in ordine di dichiarazione; i temporanei vengono rilasciati alla fine dell'istruzione.
+- I panic fanno unwinding di default ed eseguono i distruttori lungo il percorso; `panic = "abort"` rinuncia a questo in cambio di binari più piccoli e un po' più veloci.
+- `drop`, `forget`, `ManuallyDrop` e `Box::leak` danno un controllo esplicito; `let _ =` rilascia subito.
+- `#![no_std]` mantiene il linguaggio e `core` togliendo la parte di runtime che dipende dal sistema operativo.

@@ -1,0 +1,220 @@
+---
+/**
+ * Visibility explorer for a sample crate. The rules implemented client-side
+ * mirror rustc: an item is reachable from module M only if every segment of
+ * its path is visible from M, and a segment with visibility scope S is
+ * visible from M when M is S or a descendant of S.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string; from: string; target: string; here: string;
+  vis: Record<'priv' | 'super' | 'crate' | 'pub', string>;
+  rule: Record<'priv' | 'super' | 'crate' | 'pub', string>;
+  ok: string; blocked: string; stepOk: string; stepBlocked: string;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'module-tree');
+
+type Vis = 'priv' | 'super' | 'crate' | 'pub';
+interface Node { id: string; kind: 'crate' | 'mod' | 'fn' | 'struct' | 'field'; vis: Vis; label: string }
+const nodes: Node[] = [
+  { id: 'crate', kind: 'crate', vis: 'pub', label: 'crate // main.rs' },
+  { id: 'main', kind: 'fn', vis: 'priv', label: 'fn main()' },
+  { id: 'net', kind: 'mod', vis: 'priv', label: 'mod net' },
+  { id: 'net::default_port', kind: 'fn', vis: 'priv', label: 'fn default_port()' },
+  { id: 'net::log', kind: 'fn', vis: 'crate', label: 'fn log()' },
+  { id: 'net::Request', kind: 'struct', vis: 'pub', label: 'struct Request' },
+  { id: 'net::Request::path', kind: 'field', vis: 'pub', label: 'path: String' },
+  { id: 'net::Request::retries', kind: 'field', vis: 'priv', label: 'retries: u8' },
+  { id: 'net::tcp', kind: 'mod', vis: 'pub', label: 'mod tcp' },
+  { id: 'net::tcp::connect', kind: 'fn', vis: 'pub', label: 'fn connect()' },
+  { id: 'net::http', kind: 'mod', vis: 'priv', label: 'mod http' },
+  { id: 'net::http::get', kind: 'fn', vis: 'pub', label: 'fn get()' },
+  { id: 'net::http::parse', kind: 'fn', vis: 'super', label: 'fn parse()' },
+  { id: 'app', kind: 'mod', vis: 'priv', label: 'mod app' },
+  { id: 'app::run', kind: 'fn', vis: 'pub', label: 'fn run()' },
+];
+const depth = (id: string) => (id === 'crate' ? 0 : id.split('::').length);
+const visPrefix = (v: Vis) => (v === 'priv' ? '' : v === 'pub' ? 'pub ' : `pub(${v}) `);
+const modules = nodes.filter((n) => n.kind === 'crate' || n.kind === 'mod');
+const targets = nodes.filter((n) => n.kind !== 'crate');
+const path = (id: string) => (id === 'crate' ? 'crate' : `crate::${id}`);
+---
+<WidgetFrame
+  tag="module-tree"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="branch"
+  data-nodes={JSON.stringify(nodes.map(({ id, kind, vis }) => ({ id, kind, vis })))}
+  data-strings={JSON.stringify(s)}
+>
+  <div class="mt-pickers">
+    <label>
+      <span>{s.from}</span>
+      <select data-from>
+        {modules.map((m) => <option value={m.id} selected={m.id === 'app'}>{path(m.id)}</option>)}
+      </select>
+    </label>
+    <label>
+      <span>{s.target}</span>
+      <select data-target>
+        {targets.map((n) => <option value={n.id} selected={n.id === 'net::http::get'}>{path(n.id)}</option>)}
+      </select>
+    </label>
+  </div>
+
+  <ul class="mt-tree" role="list">
+    {nodes.map((n) => (
+      <li class="mt-row" data-id={n.id} data-kind={n.kind} style={`--d:${depth(n.id)}`}>
+        <button type="button" disabled={n.kind === 'crate'}>
+          <span class="mt-name">
+            {n.kind !== 'crate' && n.vis !== 'priv' && <span class="tok-kw">{visPrefix(n.vis)}</span>}
+            {n.kind === 'crate' ? <span class="tok-kw">{n.label}</span> : n.label}
+          </span>
+          <span class={`mt-vis vis-${n.vis}`}>{n.kind === 'crate' ? 'root' : s.vis[n.vis]}</span>
+          <span class="mt-here">{s.here}</span>
+        </button>
+      </li>
+    ))}
+  </ul>
+
+  <div class="widget-caption mt-verdict" aria-live="polite">
+    <p data-verdict></p>
+    <ol class="mt-steps" data-steps></ol>
+  </div>
+</WidgetFrame>
+
+<script>
+  interface N { id: string; kind: string; vis: 'priv' | 'super' | 'crate' | 'pub' }
+
+  const parentOf = (id: string) => (id.includes('::') ? id.slice(0, id.lastIndexOf('::')) : 'crate');
+  const inside = (m: string, scope: string) => scope === 'crate' || m === scope || m.startsWith(scope + '::');
+  const show = (id: string) => (id === 'crate' ? 'crate' : `crate::${id}`);
+
+  class ModuleTree extends HTMLElement {
+    #nodes = new Map<string, N>();
+    #s: any = {};
+
+    connectedCallback() {
+      (JSON.parse(this.dataset.nodes ?? '[]') as N[]).forEach((n) => this.#nodes.set(n.id, n));
+      this.#s = JSON.parse(this.dataset.strings ?? '{}');
+      const from = this.querySelector<HTMLSelectElement>('[data-from]')!;
+      const target = this.querySelector<HTMLSelectElement>('[data-target]')!;
+      from.addEventListener('change', () => this.#update());
+      target.addEventListener('change', () => this.#update());
+      this.querySelectorAll<HTMLLIElement>('.mt-row').forEach((row) =>
+        row.querySelector('button')!.addEventListener('click', () => {
+          target.value = row.dataset.id!;
+          this.#update();
+        }),
+      );
+      this.#update();
+    }
+
+    /** The module a node's visibility is measured from. */
+    #scope(n: N): string {
+      const owner = n.kind === 'field' ? parentOf(parentOf(n.id)) : parentOf(n.id);
+      if (n.vis === 'priv') return owner;
+      if (n.vis === 'super') return parentOf(owner);
+      return 'crate';
+    }
+
+    #update() {
+      const from = this.querySelector<HTMLSelectElement>('[data-from]')!.value;
+      const targetId = this.querySelector<HTMLSelectElement>('[data-target]')!.value;
+      const segs = targetId.split('::');
+      const chain = segs.map((_, i) => this.#nodes.get(segs.slice(0, i + 1).join('::'))!);
+      const blockedAt = chain.findIndex((n) => !inside(from, this.#scope(n)));
+
+      this.querySelectorAll<HTMLElement>('.mt-row').forEach((row) => {
+        const id = row.dataset.id!;
+        const idx = chain.findIndex((n) => n.id === id);
+        row.classList.toggle('is-from', id === from);
+        row.classList.toggle('is-target', id === targetId);
+        row.dataset.path = idx < 0 ? '' : blockedAt >= 0 && idx >= blockedAt ? (idx === blockedAt ? 'blocked' : 'unreached') : 'ok';
+      });
+
+      const s = this.#s;
+      const verdict = this.querySelector<HTMLElement>('[data-verdict]')!;
+      verdict.innerHTML = blockedAt < 0
+        ? s.ok.replace('{from}', show(from))
+        : s.blocked.replace('{item}', show(chain[blockedAt]!.id));
+      this.querySelector('.mt-verdict')!.classList.toggle('is-blocked', blockedAt >= 0);
+
+      this.querySelector('[data-steps]')!.innerHTML = chain
+        .slice(0, blockedAt < 0 ? chain.length : blockedAt + 1)
+        .map((n, i) => {
+          const ok = i !== blockedAt;
+          const rule = s.rule[n.vis].replace('{scope}', show(this.#scope(n)));
+          return `<li class="${ok ? 'ok' : 'bad'}"><code>${n.id.split('::').pop()}</code> <span class="st">${ok ? '✓ ' + s.stepOk : '✗ ' + s.stepBlocked}</span><br><small>${rule}</small></li>`;
+        })
+        .join('');
+    }
+  }
+  customElements.define('module-tree', ModuleTree);
+</script>
+
+<style>
+  module-tree { display: block; }
+  .mt-pickers {
+    display: grid; gap: var(--space-3);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+    & label { display: grid; gap: var(--space-1); font-size: 0.75rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    & select { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; color: var(--text); }
+  }
+
+  .mt-tree {
+    list-style: none; margin: 0; padding: var(--space-2) 0;
+    border-radius: var(--radius); background: var(--code-bg); border: 1px solid var(--code-border);
+    font-family: var(--font-mono); font-size: 0.82rem;
+  }
+  .mt-row button {
+    position: relative; display: flex; align-items: center; gap: var(--space-2); inline-size: 100%;
+    padding: 0.28rem var(--space-3) 0.28rem calc(var(--space-3) + var(--d) * 1.35rem);
+    border: 0; background: transparent; text-align: start; font: inherit; color: var(--text);
+    border-inline-start: 3px solid transparent;
+    transition: background-color var(--dur), border-color var(--dur), opacity var(--dur);
+    &:hover:not(:disabled) { background: var(--surface-2); }
+    &:disabled { cursor: default; }
+  }
+  /* tree connector */
+  .mt-row:not([data-kind='crate']) button::before {
+    content: ''; position: absolute; inset-block: 0 50%;
+    inset-inline-start: calc(var(--space-3) + (var(--d) - 1) * 1.35rem + 0.45rem);
+    inline-size: 0.6rem; border-inline-start: 1px solid var(--border-strong); border-block-end: 1px solid var(--border-strong);
+    border-end-start-radius: 4px;
+  }
+  .mt-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mt-row[data-kind='mod'] .mt-name, .mt-row[data-kind='crate'] .mt-name { font-weight: 700; }
+  .mt-vis {
+    margin-inline-start: auto; flex: none; padding: 0.05rem 0.5rem; border-radius: var(--radius-full);
+    font-size: 0.68rem; font-family: var(--font-sans); font-weight: 600; background: var(--surface-3); color: var(--text-muted);
+  }
+  .vis-pub { background: color-mix(in oklch, var(--ok) 16%, transparent); color: var(--ok); }
+  .vis-crate { background: color-mix(in oklch, var(--info) 16%, transparent); color: var(--info); }
+  .vis-super { background: color-mix(in oklch, var(--violet) 16%, transparent); color: var(--violet); }
+  .mt-here {
+    display: none; flex: none; padding: 0.05rem 0.5rem; border-radius: var(--radius-full);
+    font: 600 0.68rem var(--font-sans); background: var(--accent); color: var(--on-accent);
+  }
+  .mt-row.is-from .mt-here { display: inline-block; }
+  .mt-row.is-from button { background: var(--accent-soft); }
+  .mt-row[data-path='ok'] button { border-inline-start-color: var(--ok); background: color-mix(in oklch, var(--ok) 9%, transparent); }
+  .mt-row[data-path='blocked'] button { border-inline-start-color: var(--invalid); background: color-mix(in oklch, var(--invalid) 12%, transparent); }
+  .mt-row[data-path='unreached'] button { border-inline-start-color: var(--border-strong); opacity: 0.6; }
+  .mt-row.is-target .mt-name { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+
+  .mt-verdict { border-inline-start: 3px solid var(--ok); }
+  .mt-verdict.is-blocked { border-inline-start-color: var(--invalid); }
+  .mt-verdict p { color: var(--text); font-weight: 500; }
+  .mt-steps {
+    list-style: none; padding: 0; margin-block-start: var(--space-3); display: grid; gap: var(--space-2);
+    & :global(li) { padding-inline-start: var(--space-3); border-inline-start: 2px solid var(--ok); }
+    & :global(li.bad) { border-inline-start-color: var(--invalid); }
+    & :global(.st) { font-size: 0.75rem; font-weight: 600; color: var(--ok); }
+    & :global(li.bad .st) { color: var(--invalid); }
+    & :global(small) { color: var(--text-muted); }
+  }
+  @container widget (width < 30rem) { .mt-vis { display: none; } }
+</style>

@@ -1,0 +1,19 @@
+---
+/** Brand mark: a cog (Rust's "R" gear) wrapping a pair of angle brackets. */
+interface Props { class?: string }
+const teeth = Array.from({ length: 12 }, (_, i) => i * 30);
+---
+<svg class={Astro.props.class} viewBox="0 0 48 48" aria-hidden="true">
+  <defs>
+    <linearGradient id="logo-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="var(--accent)" />
+      <stop offset="1" stop-color="var(--accent-strong)" />
+    </linearGradient>
+  </defs>
+  <g fill="url(#logo-g)">
+    {teeth.map((deg) => <rect x="21.5" y="2" width="5" height="8" rx="1.5" transform={`rotate(${deg} 24 24)`} />)}
+    <circle cx="24" cy="24" r="16" />
+  </g>
+  <circle cx="24" cy="24" r="11.5" fill="var(--bg)" />
+  <path d="M20 19.5 15.5 24l4.5 4.5M28 19.5l4.5 4.5-4.5 4.5" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

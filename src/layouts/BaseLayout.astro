@@ -1,0 +1,53 @@
+---
+import '@/styles/global.css';
+import Header from '@/components/Header.astro';
+import Footer from '@/components/Footer.astro';
+import { useTranslations } from '@/i18n';
+import { locales, localeLabels, type Locale, type Track } from '@/i18n/config';
+import { switchLocale, url } from '@/lib/url';
+
+interface Props {
+  lang: Locale;
+  title?: string;
+  description?: string;
+  currentTrack?: Track;
+  progress?: boolean;
+}
+const { lang, title, description, currentTrack, progress } = Astro.props;
+const { t } = useTranslations(lang);
+const fullTitle = title ? `${title} · ${t('site.title')}` : t('site.title');
+const desc = description ?? t('site.description');
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+<!doctype html>
+<html lang={localeLabels[lang].htmlLang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={desc} />
+    <link rel="canonical" href={canonical} />
+    {locales.map((l) => <link rel="alternate" hreflang={l} href={new URL(switchLocale(Astro.url.pathname, l), Astro.site)} />)}
+    <link rel="icon" type="image/svg+xml" href={url('/favicon.svg')} />
+    <meta name="theme-color" content="#f7f5f2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16171d" media="(prefers-color-scheme: dark)" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={desc} />
+    <meta property="og:locale" content={lang === 'it' ? 'it_IT' : 'en_US'} />
+    <script is:inline>
+      // Apply the saved theme before first paint to avoid a flash.
+      try {
+        const m = localStorage.getItem('theme');
+        if (m === 'light' || m === 'dark') document.documentElement.dataset.theme = m;
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{t('nav.skipToContent')}</a>
+    <Header lang={lang} currentTrack={currentTrack} progress={progress} />
+    <main id="main" class="page-main">
+      <slot />
+    </main>
+    <Footer lang={lang} />
+  </body>
+</html>

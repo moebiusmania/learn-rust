@@ -1,0 +1,198 @@
+---
+/**
+ * Lifetime bars aligned with code lines: values (how long they live) and
+ * borrows (how long they must stay valid). A borrow that extends past its
+ * referent is drawn in --invalid, mirroring rustc's E0597.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import { getLang, widgetStrings } from '@/i18n';
+import { highlightRustLines } from '@/scripts/rust-highlight';
+
+interface Strings {
+  title: string; subtitle: string; presets: { label: string; text: string }[];
+  legendValue: string; legendBorrow: string; legendInvalid: string; ok: string; hover: string;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'lifetime-visualizer');
+
+interface Bar { name: string; kind: 'value' | 'borrow'; from: number; to: number; bad?: number }
+interface Preset { code: string; bars: Bar[]; error?: { message: string; lines: number[] } }
+
+const presets: Preset[] = [
+  {
+    code: `fn main() {
+    let s = String::from("hi");
+    let r = &s;
+    println!("{r}");
+}`,
+    bars: [
+      { name: 's', kind: 'value', from: 2, to: 5 },
+      { name: 'r', kind: 'borrow', from: 3, to: 4 },
+    ],
+  },
+  {
+    code: `fn main() {
+    let r;
+    {
+        let x = 5;
+        r = &x;
+    }
+    println!("{r}");
+}`,
+    bars: [
+      { name: 'x', kind: 'value', from: 4, to: 6 },
+      { name: 'r', kind: 'borrow', from: 5, to: 7, bad: 7 },
+    ],
+    error: { message: 'error[E0597]: `x` does not live long enough', lines: [5, 7] },
+  },
+  {
+    code: `fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+    if a.len() >= b.len() { a } else { b }
+}
+
+fn main() {
+    let a = String::from("long");
+    let res;
+    {
+        let b = String::from("xyz");
+        res = longest(&a, &b);
+    }
+    println!("{res}");
+}`,
+    bars: [
+      { name: 'a', kind: 'value', from: 6, to: 13 },
+      { name: 'b', kind: 'value', from: 9, to: 11 },
+      { name: "'a", kind: 'borrow', from: 10, to: 12, bad: 12 },
+    ],
+    error: { message: 'error[E0597]: `b` does not live long enough', lines: [10, 12] },
+  },
+];
+const rendered = presets.map((p) => ({ ...p, lines: highlightRustLines(p.code) }));
+---
+<WidgetFrame tag="lifetime-visualizer" title={s.title} subtitle={s.subtitle} icon="clock">
+  <div class="widget-controls">
+    <div class="seg" role="group" aria-label={s.title}>
+      {s.presets.map((p, i) => <button type="button" data-preset={i} aria-pressed={i === 0 ? 'true' : 'false'}>{p.label}</button>)}
+    </div>
+  </div>
+
+  {
+    rendered.map((p, pi) => (
+      <div class="lv-preset" data-panel={pi} hidden={pi !== 0}>
+        <div class="lv-grid code-lines" style={`--bars:${p.bars.length}`}>
+          {p.bars.map((b, bi) => (
+            <span class="lv-name" style={`grid-column:${bi + 2}`}>{b.name}</span>
+          ))}
+          {p.lines.map((html, li) => (
+            <span
+              class:list={['ln', { 'is-error': p.error?.lines.includes(li + 1) }]}
+              style={`grid-row:${li + 2}`}
+              set:html={html}
+            />
+          ))}
+          {p.bars.map((b, bi) => {
+            const okTo = b.bad ? b.bad - 1 : b.to;
+            return (
+              <span
+                class:list={['lv-bar', b.kind]}
+                tabindex="0"
+                data-from={b.from}
+                data-to={b.to}
+                aria-label={`${b.name}: ${b.from}–${b.to}`}
+                style={`grid-column:${bi + 2};grid-row:${b.from + 1} / ${b.to + 2}`}
+              >
+                <span class="seg-ok" style={`flex:${okTo - b.from + 1}`} />
+                {b.bad && <span class="seg-bad" style={`flex:${b.to - b.bad + 1}`} />}
+              </span>
+            );
+          })}
+        </div>
+        <div class:list={['widget-caption', { 'lv-err': p.error }]}>
+          {p.error ? <code class="lv-msg">{p.error.message}</code> : <span class="lv-ok">✓ {s.ok}</span>}
+          <p set:html={s.presets[pi]?.text} />
+        </div>
+      </div>
+    ))
+  }
+
+  <div class="lv-legend">
+    <span><i class="sw value" />{s.legendValue}</span>
+    <span><i class="sw borrow" />{s.legendBorrow}</span>
+    <span><i class="sw bad" />{s.legendInvalid}</span>
+    <span class="muted">{s.hover}</span>
+  </div>
+</WidgetFrame>
+
+<script>
+  class LifetimeVisualizer extends HTMLElement {
+    connectedCallback() {
+      const buttons = this.querySelectorAll<HTMLButtonElement>('[data-preset]');
+      buttons.forEach((b) =>
+        b.addEventListener('click', () => {
+          buttons.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          this.querySelectorAll<HTMLElement>('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== b.dataset.preset));
+        }),
+      );
+      this.querySelectorAll<HTMLElement>('.lv-bar').forEach((bar) => {
+        const grid = bar.parentElement!;
+        const on = () => {
+          const from = Number(bar.dataset.from), to = Number(bar.dataset.to);
+          grid.querySelectorAll<HTMLElement>('.ln').forEach((ln, i) => {
+            const n = i + 1;
+            ln.classList.toggle('is-active', n >= from && n <= to);
+            ln.classList.toggle('is-dim', n < from || n > to);
+          });
+        };
+        const off = () => grid.querySelectorAll('.ln').forEach((ln) => ln.classList.remove('is-active', 'is-dim'));
+        bar.addEventListener('pointerenter', on);
+        bar.addEventListener('focus', on);
+        bar.addEventListener('pointerleave', off);
+        bar.addEventListener('blur', off);
+      });
+    }
+  }
+  customElements.define('lifetime-visualizer', LifetimeVisualizer);
+</script>
+
+<style>
+  lifetime-visualizer { display: block; }
+  .lv-preset { display: grid; gap: var(--space-3); animation: fade-up 350ms var(--ease-out); }
+  .lv-preset[hidden] { display: none; }
+  .lv-grid {
+    display: grid;
+    grid-template-columns: minmax(max-content, 1fr) repeat(var(--bars), 2.4rem);
+    column-gap: 0;
+    padding-inline-end: var(--space-3);
+  }
+  .lv-grid .ln { grid-column: 1; }
+  .lv-name {
+    grid-row: 1; text-align: center; font-weight: 700; font-size: 0.75rem; color: var(--text-muted);
+  }
+  .lv-bar {
+    justify-self: center; inline-size: 10px; margin-block: 4px;
+    display: flex; flex-direction: column; border-radius: 6px; overflow: hidden; cursor: help;
+    transition: inline-size 250ms var(--ease-spring), box-shadow var(--dur);
+    outline-offset: 3px;
+    &:hover, &:focus-visible { inline-size: 16px; }
+    & .seg-ok { background: var(--owner); }
+    &.borrow .seg-ok { background: var(--borrow); }
+    & .seg-bad {
+      background: repeating-linear-gradient(45deg, var(--invalid) 0 4px, color-mix(in oklch, var(--invalid) 55%, transparent) 4px 8px);
+      animation: blink 1.6s ease-in-out infinite;
+    }
+  }
+  .lv-bar.borrow { animation: grow 700ms var(--ease-out) both; transform-origin: top; }
+  @keyframes grow { from { scale: 1 0; } }
+  @keyframes blink { 50% { opacity: 0.55; } }
+  .lv-msg { color: var(--danger); font-weight: 600; background: transparent !important; padding: 0 !important; }
+  .lv-ok { color: var(--ok); font-weight: 650; }
+  .lv-err { box-shadow: inset 3px 0 0 var(--danger); }
+  .widget-caption p { margin-block-start: var(--space-1); }
+  .lv-legend {
+    display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); font-size: 0.78rem; color: var(--text-muted);
+    & span { display: inline-flex; align-items: center; gap: 0.4rem; }
+    & .sw { inline-size: 10px; block-size: 14px; border-radius: 3px; display: inline-block; }
+    & .sw.value { background: var(--owner); }
+    & .sw.borrow { background: var(--borrow); }
+    & .sw.bad { background: var(--invalid); }
+  }
+</style>

@@ -1,0 +1,317 @@
+---
+/**
+ * Step-by-step macro_rules! expansion: which arm is tried, what each
+ * metavariable binds to, and the transcribed output.
+ * Code samples are language-neutral and live here; captions live in
+ * src/i18n/locales/<lang>/widgets/macro-expander.json.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+import { highlightRustLines } from '@/scripts/rust-highlight';
+
+interface Strings {
+  title: string; subtitle: string; prev: string; next: string; restart: string;
+  definition: string; invocation: string; bindings: string; noBindings: string;
+  expansion: string; notExpanded: string; step: string; repetition: string;
+  presets: { label: string; steps: string[] }[];
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'macro-expander');
+
+/** [metavariable, value (may contain «cls|…» markers), color class, repetition #] */
+type Binding = [string, string, string, number];
+interface Step {
+  def?: { active?: number[]; error?: number[] };
+  inv?: boolean;
+  mv?: boolean;
+  bind?: Binding[];
+  out?: string;
+  outActive?: number[];
+  outError?: boolean;
+}
+interface Preset { def: string; inv: string; steps: Step[] }
+
+const HASHMAP = `macro_rules! hashmap {
+    () => { ::std::collections::HashMap::new() };
+    ($($k:expr => $v:expr),+ $(,)?) => {{
+        let mut map = ::std::collections::HashMap::new();
+        $( map.insert($k, $v); )+
+        map
+    }};
+}`;
+
+const hmBind: Binding[] = [
+  ['$k', '"ada"', 'k', 1], ['$v', '36', 'v', 1],
+  ['$k', '"linus"', 'k', 2], ['$v', '54', 'v', 2],
+];
+const hmOut = `let ages = {
+    let mut map = ::std::collections::HashMap::new();
+    map.insert(«k|"ada"», «v|36»);
+    map.insert(«k|"linus"», «v|54»);
+    map
+};`;
+
+const presets: Preset[] = [
+  {
+    def: HASHMAP,
+    inv: 'let ages = hashmap! { «k|"ada"» => «v|36», «k|"linus"» => «v|54» };',
+    steps: [
+      { inv: true },
+      { def: { error: [2] }, inv: true },
+      { def: { active: [3] }, mv: true },
+      { def: { active: [3] }, mv: true, bind: hmBind },
+      { def: { active: [4, 5, 6] }, mv: true, bind: hmBind, out: hmOut, outActive: [3, 4] },
+      { def: { active: [4] }, mv: true, bind: hmBind, out: hmOut, outActive: [2] },
+    ],
+  },
+  {
+    def: `macro_rules! count {
+    () => { 0usize };
+    ($head:tt $($tail:tt)*) => { 1usize + count!($($tail)*) };
+}`,
+    inv: 'let n = count!(«head|a» «tail|b c»);',
+    steps: [
+      { inv: true },
+      { def: { error: [2] }, inv: true },
+      {
+        def: { active: [3] }, mv: true,
+        bind: [['$head', 'a', 'head', 1], ['$tail', 'b c', 'tail', 1]],
+        out: 'let n = 1usize + count!(«tail|b c»);', outActive: [1],
+      },
+      {
+        def: { active: [3] }, mv: true,
+        bind: [['$head', 'b', 'head', 2], ['$tail', 'c', 'tail', 2]],
+        out: 'let n = 1usize + 1usize + count!(«tail|c»);', outActive: [1],
+      },
+      {
+        def: { active: [3] }, mv: true,
+        bind: [['$head', 'c', 'head', 3], ['$tail', '', 'tail', 3]],
+        out: 'let n = 1usize + 1usize + 1usize + count!();', outActive: [1],
+      },
+      { def: { active: [2] }, out: 'let n = 1usize + 1usize + 1usize + 0usize; // == 3', outActive: [1] },
+    ],
+  },
+  {
+    def: HASHMAP,
+    inv: 'let m = hashmap! { «k|"ada"»: 36 };',
+    steps: [
+      { inv: true },
+      { def: { error: [2] }, inv: true },
+      { def: { error: [3] }, mv: true, bind: [['$k', '"ada"', 'k', 1]] },
+      {
+        def: { error: [3] }, mv: true, bind: [['$k', '"ada"', 'k', 1]], outError: true,
+        out: `error: no rules expected \`:\`
+ --> src/main.rs:9:29
+  |
+9 |     let m = hashmap! { "ada": 36 };
+  |                             ^ no rules expected this token
+note: while trying to match \`=>\``,
+      },
+    ],
+  },
+];
+
+const MARK = /«(\w+)\|([\s\S]*?)»/g;
+const mark = (html: string) => html.replace(MARK, '<span class="mv mv-$1">$2</span>');
+const mvVars = (html: string) => html.replace(/\$(k|v|head|tail)\b/g, '<span class="mv mv-$1">$$$1</span>');
+const lines = (code: string) => highlightRustLines(code).map(mark);
+
+const rendered = presets.map((p) => ({
+  def: highlightRustLines(p.def).map(mvVars),
+  inv: lines(p.inv),
+  steps: p.steps.map((st) => ({
+    ...st,
+    out: st.out ? (st.outError ? st.out.split('\n').map((l) => l.replace(/&/g, '&amp;').replace(/</g, '&lt;') || ' ') : lines(st.out)) : undefined,
+    bind: st.bind?.map(([name, value, cls, rep]) => ({ name, value: value ? lines(value).join(' ') : '∅', cls, rep })),
+  })),
+}));
+
+const clientData = rendered.map((p) => p.steps);
+---
+<WidgetFrame
+  tag="macro-expander"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="wand"
+  data-steps={JSON.stringify(clientData)}
+  data-captions={JSON.stringify(s.presets.map((p) => p.steps))}
+  data-step-label={s.step}
+  data-rep={s.repetition}
+  data-no-bindings={s.noBindings}
+  data-not-expanded={s.notExpanded}
+>
+  <div class="seg me-presets" role="group" aria-label={s.title}>
+    {s.presets.map((p, i) => <button type="button" data-preset-btn={i} aria-pressed={i === 0 ? 'true' : 'false'}>{p.label}</button>)}
+  </div>
+
+  {
+    rendered.map((p, i) => (
+      <div class="me-preset" data-preset={i} hidden={i !== 0}>
+        <div class="me-panel">
+          <span class="me-label">{s.definition}</span>
+          <pre class="code-lines me-def">{p.def.map((l) => <span class="ln" set:html={l} />)}</pre>
+        </div>
+        <div class="me-panel">
+          <span class="me-label">{s.invocation}</span>
+          <pre class="code-lines me-inv">{p.inv.map((l) => <span class="ln" set:html={l} />)}</pre>
+        </div>
+      </div>
+    ))
+  }
+
+  <div class="me-panel">
+    <span class="me-label">{s.bindings}</span>
+    <div class="me-bindings" aria-live="polite"></div>
+  </div>
+  <div class="me-panel">
+    <span class="me-label">{s.expansion}</span>
+    <pre class="code-lines me-out" aria-live="polite"></pre>
+  </div>
+
+  <div class="widget-caption" aria-live="polite"><p class="me-caption"></p></div>
+
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm btn-ghost" data-prev><Icon name="prev" size={14} />{s.prev}</button>
+    <button type="button" class="btn btn-sm" data-next>{s.next}<Icon name="next" size={14} /></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-restart><Icon name="reset" size={14} />{s.restart}</button>
+    <span class="steps-dots" aria-hidden="true"></span>
+    <span class="me-count muted"></span>
+  </div>
+</WidgetFrame>
+
+<script>
+  interface Step {
+    def?: { active?: number[]; error?: number[] };
+    inv?: boolean;
+    mv?: boolean;
+    bind?: { name: string; value: string; cls: string; rep: number }[];
+    out?: string[];
+    outActive?: number[];
+    outError?: boolean;
+  }
+
+  class MacroExpander extends HTMLElement {
+    #steps: Step[][] = [];
+    #captions: string[][] = [];
+    #preset = 0;
+    #i = 0;
+
+    connectedCallback() {
+      this.#steps = JSON.parse(this.dataset.steps ?? '[]');
+      this.#captions = JSON.parse(this.dataset.captions ?? '[]');
+      this.querySelectorAll<HTMLButtonElement>('[data-preset-btn]').forEach((b) =>
+        b.addEventListener('click', () => this.#setPreset(Number(b.dataset.presetBtn))),
+      );
+      this.querySelector('[data-prev]')!.addEventListener('click', () => this.#go(this.#i - 1));
+      this.querySelector('[data-next]')!.addEventListener('click', () => this.#go(this.#i + 1));
+      this.querySelector('[data-restart]')!.addEventListener('click', () => this.#go(0));
+      this.#setPreset(0);
+    }
+
+    #setPreset(p: number) {
+      this.#preset = p;
+      this.querySelectorAll<HTMLButtonElement>('[data-preset-btn]').forEach((b) =>
+        b.setAttribute('aria-pressed', String(Number(b.dataset.presetBtn) === p)),
+      );
+      this.querySelectorAll<HTMLElement>('[data-preset]').forEach((el) => (el.hidden = Number(el.dataset.preset) !== p));
+      const dots = this.querySelector('.steps-dots')!;
+      dots.innerHTML = this.#steps[p]!.map(() => '<span></span>').join('');
+      this.#go(0);
+    }
+
+    #go(i: number) {
+      const steps = this.#steps[this.#preset]!;
+      this.#i = Math.max(0, Math.min(steps.length - 1, i));
+      const st = steps[this.#i]!;
+      const root = this.querySelector<HTMLElement>(`[data-preset="${this.#preset}"]`)!;
+
+      root.querySelectorAll<HTMLElement>('.me-def .ln').forEach((ln, k) => {
+        const n = k + 1;
+        const active = st.def?.active?.includes(n) ?? false;
+        const error = st.def?.error?.includes(n) ?? false;
+        ln.classList.toggle('is-active', active);
+        ln.classList.toggle('is-error', error);
+        ln.classList.toggle('is-dim', !!st.def && !active && !error);
+      });
+      root.querySelectorAll('.me-inv .ln').forEach((ln) => ln.classList.toggle('is-active', !!st.inv));
+      root.classList.toggle('show-mv', !!st.mv);
+
+      const bindings = this.querySelector<HTMLElement>('.me-bindings')!;
+      bindings.innerHTML = st.bind?.length
+        ? st.bind
+            .map(
+              (b, k) =>
+                `<div class="me-bind" style="--k:${k}"><span class="me-rep">${this.dataset.rep} ${b.rep}</span><code class="mv mv-${b.cls}">${b.name}</code><span class="me-arrow">→</span><code>${b.value}</code></div>`,
+            )
+            .join('')
+        : `<p class="me-empty">${this.dataset.noBindings}</p>`;
+
+      const out = this.querySelector<HTMLElement>('.me-out')!;
+      out.classList.toggle('is-error-block', !!st.outError);
+      out.innerHTML = st.out
+        ? st.out
+            .map((l, k) => {
+              const cls = st.outError ? 'is-error' : st.outActive?.includes(k + 1) ? 'is-active' : '';
+              return `<span class="ln ${cls}" style="--k:${k}">${l}</span>`;
+            })
+            .join('')
+        : `<span class="me-empty">${this.dataset.notExpanded}</span>`;
+
+      this.querySelector('.me-caption')!.innerHTML = this.#captions[this.#preset]?.[this.#i] ?? '';
+      this.querySelectorAll('.steps-dots span').forEach((d, k) => d.classList.toggle('on', k === this.#i));
+      this.querySelector('.me-count')!.textContent = (this.dataset.stepLabel ?? '')
+        .replace('{n}', String(this.#i + 1))
+        .replace('{total}', String(steps.length));
+      (this.querySelector('[data-prev]') as HTMLButtonElement).disabled = this.#i === 0;
+      (this.querySelector('[data-next]') as HTMLButtonElement).disabled = this.#i === steps.length - 1;
+    }
+  }
+  customElements.define('macro-expander', MacroExpander);
+</script>
+
+<style>
+  macro-expander { display: block; }
+  .me-presets { justify-self: start; flex-wrap: wrap; }
+  .me-preset { display: grid; gap: var(--space-4); }
+  .me-preset[hidden] { display: none; }
+  .me-panel { display: grid; gap: var(--space-2); min-inline-size: 0; }
+  .me-label {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint);
+  }
+  .me-def, .me-inv, .me-out { font-size: 0.78rem; }
+
+  /* metavariable colors: always on in bindings/output, opt-in on the invocation */
+  :global(.mv) { border-radius: 4px; transition: background-color var(--dur), box-shadow var(--dur); }
+  .me-def :global(.mv-k), .me-bindings :global(.mv-k), .me-out :global(.mv-k), .show-mv .me-inv :global(.mv-k) {
+    background: color-mix(in oklch, var(--accent) 22%, transparent); box-shadow: 0 0 0 1px color-mix(in oklch, var(--accent) 45%, transparent);
+  }
+  .me-def :global(.mv-v), .me-bindings :global(.mv-v), .me-out :global(.mv-v), .show-mv .me-inv :global(.mv-v) {
+    background: color-mix(in oklch, var(--violet) 22%, transparent); box-shadow: 0 0 0 1px color-mix(in oklch, var(--violet) 45%, transparent);
+  }
+  .me-def :global(.mv-head), .me-bindings :global(.mv-head), .me-out :global(.mv-head), .show-mv .me-inv :global(.mv-head) {
+    background: color-mix(in oklch, var(--ok) 22%, transparent); box-shadow: 0 0 0 1px color-mix(in oklch, var(--ok) 45%, transparent);
+  }
+  .me-def :global(.mv-tail), .me-bindings :global(.mv-tail), .me-out :global(.mv-tail), .show-mv .me-inv :global(.mv-tail) {
+    background: color-mix(in oklch, var(--info) 22%, transparent); box-shadow: 0 0 0 1px color-mix(in oklch, var(--info) 45%, transparent);
+  }
+
+  .me-bindings {
+    display: flex; flex-wrap: wrap; gap: var(--space-2); min-block-size: 2.4rem; align-items: center;
+  }
+  .me-bindings :global(.me-bind) {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    padding: 0.3rem 0.6rem; border-radius: var(--radius-s);
+    background: var(--surface-2); border: 1px solid var(--border);
+    font-size: 0.8rem; animation: fade-up 360ms var(--ease-out) both; animation-delay: calc(var(--k) * 70ms);
+  }
+  .me-bindings :global(code) { font-family: var(--font-mono); font-size: 0.8rem; padding: 0 0.25em; }
+  .me-bindings :global(.me-rep) { font-size: 0.68rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .me-bindings :global(.me-arrow) { color: var(--text-faint); }
+  :global(.me-empty) { color: var(--text-faint); font-size: 0.8rem; font-style: italic; padding-inline: var(--space-4); }
+  .me-out { min-block-size: 3rem; }
+  .me-out :global(.ln) { animation: fade-up 360ms var(--ease-out) both; animation-delay: calc(var(--k) * 50ms); }
+  .me-out.is-error-block :global(.ln) { color: color-mix(in oklch, var(--danger) 75%, var(--text)); }
+  .me-count { font-size: 0.78rem; margin-inline-start: auto; }
+  .me-caption { margin: 0; }
+  .me-caption :global(em) { font-style: italic; color: var(--text); }
+</style>

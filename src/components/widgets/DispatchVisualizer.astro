@@ -1,0 +1,198 @@
+---
+/**
+ * Static (monomorphized) vs dynamic (vtable) dispatch for `notify(&value)`.
+ * A dot travels along the call path; the value selector switches between
+ * two concrete types implementing the same trait.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string; static: string; dynamic: string; value: string; call: string;
+  caller: string; fatPointer: string; dataPtr: string; vtablePtr: string; vtable: string; data: string;
+  copies: string; staticFacts: string[]; dynamicFacts: string[];
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'dispatch-visualizer');
+const vtRows = ['drop_in_place', 'size', 'align', 'send'];
+---
+<WidgetFrame tag="dispatch-visualizer" title={s.title} subtitle={s.subtitle} icon="branch" data-mode="static" data-value="Email">
+  <div class="widget-controls dv-controls">
+    <div class="seg" role="group" aria-label="dispatch">
+      <button type="button" data-set-mode="static" aria-pressed="true">{s.static}</button>
+      <button type="button" data-set-mode="dynamic" aria-pressed="false">{s.dynamic}</button>
+    </div>
+    <div class="seg" role="group" aria-label={s.value}>
+      <button type="button" data-set-value="Email" aria-pressed="true">Email</button>
+      <button type="button" data-set-value="Sms" aria-pressed="false">Sms</button>
+    </div>
+    <button type="button" class="btn btn-sm" data-call><Icon name="play" size={14} />{s.call}</button>
+  </div>
+
+  <svg class="dv-svg" viewBox="0 0 720 250" role="img" aria-label={s.title}>
+    <defs>
+      <marker id="dv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0 0 10 5 0 10z" fill="var(--border-strong)" />
+      </marker>
+    </defs>
+
+    <!-- static: monomorphized copies -->
+    <g class="mode-static">
+      <g class="box caller"><rect x="10" y="100" width="170" height="50" rx="10" /><text x="95" y="130">notify(&amp;value)</text></g>
+      <text x="95" y="170" class="small">{s.caller}</text>
+      <text x="365" y="129" class="small">{s.copies}</text>
+      {['Email', 'Sms'].map((T, i) => {
+        const y = i === 0 ? 30 : 170;
+        return (
+          <g class="lane" data-for={T}>
+            <g class="box copy"><rect x="270" y={y} width="190" height="50" rx="10" /><text x="365" y={y + 30}>{`notify::<${T}>`}</text></g>
+            <g class="box impl"><rect x="520" y={y} width="180" height="50" rx="10" /><text x="610" y={y + 30}>{`${T}::send`}</text></g>
+            <path class="flow" data-seq="0" d={`M180 125 C 225 125, 225 ${y + 25}, 268 ${y + 25}`} marker-end="url(#dv-arrow)" />
+            <path class="flow" data-seq="1" d={`M460 ${y + 25} L 518 ${y + 25}`} marker-end="url(#dv-arrow)" />
+          </g>
+        );
+      })}
+    </g>
+
+    <!-- dynamic: fat pointer + vtable -->
+    <g class="mode-dynamic">
+      <g class="box caller"><rect x="10" y="100" width="150" height="50" rx="10" /><text x="85" y="130">notify(&amp;value)</text></g>
+      <text x="85" y="170" class="small">{s.caller}</text>
+      <text x="285" y="72" class="small">{s.fatPointer}</text>
+      <g class="box fat"><rect x="210" y="82" width="150" height="34" rx="6" /><text x="285" y="104">{s.dataPtr}</text></g>
+      <g class="box fat vt-ptr"><rect x="210" y="116" width="150" height="34" rx="6" /><text x="285" y="138">{s.vtablePtr}</text></g>
+      <g class="box data"><rect x="420" y="10" width="130" height="46" rx="8" /><text x="485" y="38" data-tpl="{T} { … }">Email {'{ … }'}</text></g>
+      <text x="485" y="92" class="small" data-tpl={`${s.vtable} · {T}`}>{s.vtable} · Email</text>
+      {vtRows.map((r, i) => (
+        <g class:list={['box', 'vt-row', { 'vt-send': r === 'send' }]}>
+          <rect x="420" y={100 + i * 28} width="130" height="28" />
+          <text x="485" y={119 + i * 28}>{r}</text>
+        </g>
+      ))}
+      <g class="box impl dyn-impl"><rect x="590" y="180" width="120" height="36" rx="8" /><text x="650" y="203" data-tpl="{T}::send">Email::send</text></g>
+      <path class="ptr" d="M360 99 C 390 99, 390 33, 418 33" marker-end="url(#dv-arrow)" />
+      <path class="flow" data-seq="0" d="M160 125 L 208 125" marker-end="url(#dv-arrow)" />
+      <path class="flow" data-seq="1" d="M360 133 C 390 133, 390 114, 418 114" marker-end="url(#dv-arrow)" />
+      <path class="flow" data-seq="2" d="M550 198 L 588 198" marker-end="url(#dv-arrow)" />
+    </g>
+
+    <circle class="dot" r="7" cx="-20" cy="-20" />
+  </svg>
+
+  <ul class="dv-facts" data-facts="static">{s.staticFacts.map((f) => <li set:html={f} />)}</ul>
+  <ul class="dv-facts" data-facts="dynamic">{s.dynamicFacts.map((f) => <li set:html={f} />)}</ul>
+</WidgetFrame>
+
+<script>
+  class DispatchVisualizer extends HTMLElement {
+    #anim = 0;
+
+    connectedCallback() {
+      this.querySelectorAll<HTMLButtonElement>('[data-set-mode]').forEach((b) =>
+        b.addEventListener('click', () => this.#set('mode', b.dataset.setMode!)),
+      );
+      this.querySelectorAll<HTMLButtonElement>('[data-set-value]').forEach((b) =>
+        b.addEventListener('click', () => this.#set('value', b.dataset.setValue!)),
+      );
+      this.querySelector('[data-call]')!.addEventListener('click', () => this.#call());
+      this.#sync();
+    }
+
+    disconnectedCallback() { cancelAnimationFrame(this.#anim); }
+
+    #set(key: 'mode' | 'value', v: string) {
+      this.dataset[key] = v;
+      this.#sync();
+    }
+
+    #sync() {
+      const { mode, value } = this.dataset;
+      this.querySelectorAll<HTMLButtonElement>('[data-set-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.setMode === mode)));
+      this.querySelectorAll<HTMLButtonElement>('[data-set-value]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.setValue === value)));
+      this.querySelectorAll<SVGGElement>('.lane').forEach((g) => g.classList.toggle('active', g.dataset.for === value));
+      this.querySelectorAll<SVGTextElement>('[data-tpl]').forEach((t) => (t.textContent = t.dataset.tpl!.replace('{T}', value!)));
+      this.querySelectorAll<HTMLElement>('[data-facts]').forEach((u) => (u.hidden = u.dataset.facts !== mode));
+      this.#reset();
+    }
+
+    #reset() {
+      cancelAnimationFrame(this.#anim);
+      this.querySelectorAll('.lit').forEach((e) => e.classList.remove('lit'));
+      this.querySelector('.dot')!.classList.remove('on');
+    }
+
+    #paths(): SVGPathElement[] {
+      const { mode, value } = this.dataset;
+      const root = mode === 'static' ? this.querySelector(`.lane[data-for="${value}"]`) : this.querySelector('.mode-dynamic');
+      return [...root!.querySelectorAll<SVGPathElement>('.flow')].sort((a, b) => Number(a.dataset.seq) - Number(b.dataset.seq));
+    }
+
+    #call() {
+      this.#reset();
+      const paths = this.#paths();
+      const dot = this.querySelector<SVGCircleElement>('.dot')!;
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const per = reduced ? 1 : 650;
+      dot.classList.add('on');
+      let idx = 0;
+      let start = performance.now();
+      const frame = (now: number) => {
+        const path = paths[idx]!;
+        const t = Math.min(1, (now - start) / per);
+        const p = path.getPointAtLength(path.getTotalLength() * t);
+        dot.setAttribute('cx', String(p.x));
+        dot.setAttribute('cy', String(p.y));
+        if (t >= 1) {
+          path.classList.add('lit');
+          if (this.dataset.mode === 'dynamic' && idx === 1) this.querySelector('.vt-send')!.classList.add('lit');
+          idx++;
+          start = now;
+          if (idx >= paths.length) {
+            const target = this.dataset.mode === 'dynamic' ? this.querySelector('.dyn-impl') : this.querySelector('.lane.active .impl');
+            target?.classList.add('lit');
+            dot.classList.remove('on');
+            return;
+          }
+        }
+        this.#anim = requestAnimationFrame(frame);
+      };
+      this.#anim = requestAnimationFrame(frame);
+    }
+  }
+  customElements.define('dispatch-visualizer', DispatchVisualizer);
+</script>
+
+<style>
+  dispatch-visualizer { display: block; }
+  .dv-svg { inline-size: 100%; block-size: auto; overflow: visible; font-family: var(--font-mono); }
+  dispatch-visualizer[data-mode='static'] .mode-dynamic,
+  dispatch-visualizer[data-mode='dynamic'] .mode-static { display: none; }
+  .mode-static, .mode-dynamic { animation: fade-up 350ms var(--ease-out); }
+
+  .box rect { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.2; transition: fill var(--dur), stroke var(--dur); }
+  .box text { font-size: 13px; fill: var(--text); text-anchor: middle; }
+  .small { font: 600 11px var(--font-sans); fill: var(--text-faint); text-anchor: middle; letter-spacing: 0.02em; }
+  .caller rect { fill: var(--accent-soft); stroke: var(--accent); }
+  .fat rect { fill: color-mix(in oklch, var(--stack) 12%, var(--surface)); stroke: var(--stack); }
+  .data rect { fill: color-mix(in oklch, var(--heap) 12%, var(--surface)); stroke: var(--heap); }
+  .vt-row rect { fill: var(--surface); }
+  .vt-row text { font-size: 12px; fill: var(--text-muted); }
+  .lane { transition: opacity var(--dur); opacity: 0.4; }
+  .lane.active { opacity: 1; }
+
+  .flow, .ptr { fill: none; stroke: var(--border-strong); stroke-width: 2; transition: stroke var(--dur); }
+  .ptr { stroke-dasharray: 4 4; }
+  .flow.lit { stroke: var(--accent); }
+  :global(.lit) > rect { fill: color-mix(in oklch, var(--accent) 22%, var(--surface)); stroke: var(--accent); }
+  .dot { fill: var(--accent); opacity: 0; filter: drop-shadow(0 0 6px var(--accent)); transition: opacity 150ms; }
+  .dot:global(.on) { opacity: 1; }
+
+  .dv-facts {
+    margin: 0; padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
+    background: var(--surface-2); border-radius: var(--radius);
+    font-size: var(--step--1); color: var(--text-muted); display: grid; gap: var(--space-1);
+    & li::marker { color: var(--accent); }
+    & :global(code) { font-size: 0.88em; }
+  }
+  .dv-facts[hidden] { display: none; }
+</style>

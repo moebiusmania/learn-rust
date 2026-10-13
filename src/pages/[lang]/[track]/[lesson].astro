@@ -1,0 +1,130 @@
+---
+import { render } from 'astro:content';
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import { mdxComponents } from '@/components/mdx';
+import Icon from '@/components/Icon.astro';
+import { useTranslations } from '@/i18n';
+import { locales, tracks, type Locale, type Track } from '@/i18n/config';
+import { localeUrl } from '@/lib/url';
+import { getLessons, getTrackInfo, type Lesson } from '@/lib/content';
+
+export async function getStaticPaths() {
+  const paths = [];
+  for (const lang of locales) {
+    const all = await getLessons(lang);
+    for (const track of tracks) {
+      const inTrack = all.filter((l) => l.track === track);
+      for (const lesson of inTrack) paths.push({ params: { lang, track, lesson: lesson.slug }, props: { lesson, inTrack } });
+    }
+  }
+  return paths;
+}
+
+interface Props { lesson: Lesson; inTrack: Lesson[] }
+const { lesson, inTrack } = Astro.props;
+const lang = Astro.params.lang as Locale;
+const track = Astro.params.track as Track;
+const { t } = useTranslations(lang);
+const info = await getTrackInfo(lang, track);
+const { Content, headings } = await render(lesson.entry);
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+
+const index = inTrack.indexOf(lesson);
+const prev = inTrack[index - 1];
+const next = inTrack[index + 1];
+const nextTrack = !next ? tracks[tracks.indexOf(track) + 1] : undefined;
+const nextTrackInfo = nextTrack ? await getTrackInfo(lang, nextTrack) : undefined;
+const { title, description, duration, tags } = lesson.entry.data;
+---
+<BaseLayout lang={lang} title={title} description={description} currentTrack={track} progress>
+  <div class="container lesson-layout">
+    <aside class="lesson-sidebar">
+      <nav class="side-nav" aria-label={t('nav.lessons')}>
+        <h2><a href={localeUrl(lang, track)}>{info.title}</a></h2>
+        <ol>
+          {inTrack.map((l) => (
+            <li><a href={localeUrl(lang, track, l.slug)} aria-current={l === lesson ? 'page' : undefined}>{l.entry.data.title}</a></li>
+          ))}
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="lesson-article">
+      <nav class="crumbs" aria-label="breadcrumb">
+        <a href={localeUrl(lang)}>{t('nav.home')}</a><span class="sep">/</span>
+        <a href={localeUrl(lang, track)}>{info.title}</a><span class="sep">/</span>
+        <span>{t('lesson.lessonOf', { n: index + 1, total: inTrack.length })}</span>
+      </nav>
+      <header class="lesson-head">
+        <h1>{title}</h1>
+        <p class="lesson-desc">{description}</p>
+        <div class="lesson-meta">
+          <span class="chip"><Icon name="clock" size={12} />{t('lesson.minutes', { count: duration })}</span>
+          {tags.map((tag) => <span class="chip">{tag}</span>)}
+        </div>
+      </header>
+
+      <div class="prose">
+        <Content components={mdxComponents} />
+      </div>
+
+      <nav class="pager">
+        {prev && (
+          <a class="prev" href={localeUrl(lang, track, prev.slug)}>
+            <small>← {t('nav.prev')}</small><span>{prev.entry.data.title}</span>
+          </a>
+        )}
+        {next && (
+          <a class="next" href={localeUrl(lang, track, next.slug)}>
+            <small>{t('nav.next')} →</small><span>{next.entry.data.title}</span>
+          </a>
+        )}
+        {!next && nextTrack && nextTrackInfo && (
+          <a class="next" href={localeUrl(lang, nextTrack)}>
+            <small>{t('nav.nextTrack')} →</small><span>{nextTrackInfo.title}</span>
+          </a>
+        )}
+      </nav>
+    </article>
+
+    <aside class="lesson-toc">
+      {toc.length > 0 && (
+        <nav class="toc" aria-label={t('nav.onThisPage')}>
+          <h2>{t('nav.onThisPage')}</h2>
+          <ul>
+            {toc.map((h) => <li class={`depth-${h.depth}`}><a href={`#${h.slug}`}>{h.text}</a></li>)}
+          </ul>
+        </nav>
+      )}
+    </aside>
+  </div>
+</BaseLayout>
+
+<script>
+  // Highlight the TOC entry of the section currently in view.
+  const links = new Map(
+    [...document.querySelectorAll<HTMLAnchorElement>('.toc a')].map((a) => [decodeURIComponent(a.hash.slice(1)), a]),
+  );
+  const headings = [...document.querySelectorAll<HTMLElement>('.prose :is(h2, h3)[id]')];
+  if (links.size && headings.length) {
+    const visible = new Set<string>();
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => (e.isIntersecting ? visible.add(e.target.id) : visible.delete(e.target.id)));
+        const current = headings.find((h) => visible.has(h.id))?.id;
+        if (!current) return;
+        links.forEach((a, id) => a.classList.toggle('active', id === current));
+      },
+      { rootMargin: '-15% 0px -70% 0px' },
+    );
+    headings.forEach((h) => io.observe(h));
+  }
+</script>
+
+<style>
+  .lesson-head { margin-block-end: var(--space-6); padding-block-end: var(--space-5); border-block-end: 1px solid var(--border); }
+  .lesson-head h1 { font-size: var(--step-3); letter-spacing: -0.03em; }
+  .lesson-desc { margin-block: var(--space-3) var(--space-4); font-size: var(--step-1); color: var(--text-muted); line-height: 1.5; }
+  .lesson-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .side-nav h2 a { color: inherit; text-decoration: none; }
+</style>

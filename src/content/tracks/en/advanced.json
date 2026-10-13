@@ -1,0 +1,14 @@
+{
+  "title": "Advanced",
+  "tagline": "Down to the metal",
+  "summary": "Fearless concurrency, async, memory layout, unsafe and FFI, macros, the minimal runtime and performance tuning.",
+  "intro": "This track opens the hood. You will see how the type system makes threads safe, what an async fn really compiles to, how values are laid out in memory, where unsafe fits, how macros generate code and what little runtime a Rust binary actually carries.",
+  "concepts": [
+    { "title": "Send and Sync", "text": "Two marker traits, derived automatically by the compiler, decide which types may cross or be shared between threads. Data races become type errors." },
+    { "title": "Async without a runtime", "text": "async fn compiles to a state machine implementing Future. The language ships no executor: you pick one (Tokio, smol, embassy) as a library." },
+    { "title": "Layout is a compiler choice", "text": "Unless you ask for repr(C), the compiler reorders fields and uses niches, so Option<&T> is the same size as a pointer." },
+    { "title": "Unsafe is a contract", "text": "unsafe does not turn checks off. It unlocks five specific operations and makes you responsible for upholding invariants the compiler cannot verify." },
+    { "title": "Code that writes code", "text": "Declarative macros match token patterns; procedural macros are compiler plugins that receive and return token streams." },
+    { "title": "A tiny runtime", "text": "No GC, no green threads, no reflection. A Rust binary carries a startup shim, an allocator and a panic handler, and even those can be removed with no_std." }
+  ]
+}

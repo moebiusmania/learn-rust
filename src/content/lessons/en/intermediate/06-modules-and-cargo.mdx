@@ -1,0 +1,237 @@
+---
+title: Modules, crates and Cargo
+description: How Rust code is organized, how privacy works, and how Cargo turns packages, workspaces and features into builds.
+duration: 22
+tags: [modules, visibility, crates, workspaces, features]
+---
+
+Rust's module system confuses many newcomers for one reason: files do not create modules by themselves. In JavaScript every file is a module; in Java the directory is the package. In Rust, modules are declared **explicitly in code**, and files are only where their bodies happen to live. Once that clicks, the rest follows from one rule: **everything is private by default**.
+
+## Modules are declared, not discovered
+
+A crate starts at its root file (`src/main.rs` or `src/lib.rs`). Every module must be declared with `mod` somewhere above it in the tree. The body can be inline, or in a file the compiler looks up by name:
+
+```text
+src/
+├── main.rs        // mod net;   ← declares the module
+└── net/
+    ├── mod.rs     // or net.rs next to main.rs (preferred today)
+    ├── tcp.rs     // mod tcp;   declared inside net
+    └── http.rs    // mod http;
+```
+
+A file that no `mod` declaration reaches is simply not compiled, no matter where it sits. There is no glob import of a folder and no implicit index file.
+
+Paths work like a file system rooted at the crate:
+
+| Path | Meaning |
+| --- | --- |
+| `crate::net::tcp` | absolute, from the crate root |
+| `self::tcp` | relative to the current module |
+| `super::default_port` | the parent module |
+| `std::collections::HashMap` | a path into another crate (here, the standard library) |
+
+`use` only creates a local alias for a path, like a symlink. It does not load anything; the module tree is already fixed by the `mod` declarations.
+
+## Privacy is per module, not per type
+
+Every item (function, struct, field, module, constant) is private unless marked otherwise. "Private" in Rust means: **visible inside the module where it is declared and in all its descendants**. That is unlike Java or C#, where `private` is scoped to a class. In Rust a child module can call its parent's private helpers, and a sibling cannot.
+
+<Playground title="A small crate with inline modules">
+```rust
+mod net {
+    pub mod tcp {
+        pub fn connect(addr: &str) -> String {
+            let port = super::default_port(); // a child can see its parent's private items
+            format!("tcp://{addr}:{port}")
+        }
+    }
+
+    mod http {
+        // private module: only `net` and its descendants can reach it
+        pub fn get(path: &str) -> String {
+            format!("GET {path} via {}", super::tcp::connect("example.com"))
+        }
+    }
+
+    fn default_port() -> u16 {
+        443
+    }
+
+    // `pub use` re-exports a private item under a public path
+    pub use self::http::get as fetch;
+
+    pub struct Request {
+        pub path: String, // public field
+        retries: u8,      // private field: no struct literal outside `net`
+    }
+
+    impl Request {
+        pub fn new(path: &str) -> Self {
+            Request { path: path.to_string(), retries: 3 }
+        }
+        pub fn retries(&self) -> u8 {
+            self.retries
+        }
+    }
+}
+
+use net::tcp;
+
+fn main() {
+    println!("{}", tcp::connect("localhost"));
+    println!("{}", net::fetch("/index.html"));
+
+    let req = net::Request::new("/api");
+    println!("{} (retries: {})", req.path, req.retries());
+}
+```
+</Playground>
+
+Three details are worth noticing:
+
+- `http::get` is `pub`, yet `main` could not call `net::http::get` directly, because the module `http` itself is private. **Every segment of a path must be visible.** `pub use` solves this by re-exporting `get` as `net::fetch`, a public path to a private location. Libraries use this all the time to present a flat, stable API over an internal layout they are free to change.
+- **Struct fields have their own visibility.** A `pub struct` with a private field cannot be built with a struct literal outside its module, so `Request::new` becomes the only constructor. This is how Rust enforces invariants without classes.
+- `impl` blocks are not a unit of privacy: the methods follow the same module rules as free functions.
+
+Use the explorer to check the rules for yourself. Pick where the code is written and what it wants to use:
+
+<ModuleTree />
+
+<Playground title="Privacy errors" expectError>
+```rust
+mod net {
+    pub struct Request {
+        pub path: String,
+        retries: u8,
+    }
+
+    fn default_port() -> u16 {
+        443
+    }
+}
+
+fn main() {
+    // Two privacy errors: a private field and a private function.
+    let req = net::Request { path: "/".into(), retries: 1 };
+    let port = net::default_port();
+    println!("{} {}", req.path, port);
+}
+```
+</Playground>
+
+The compiler reports `E0603: function default_port is private` first. Fix that line (for example by making the function `pub(crate)`) and run again: now `E0451: field retries of struct Request is private` appears. Privacy is checked in phases, so errors can surface one layer at a time.
+
+### Finer-grained visibility
+
+Between private and `pub` there are scoped variants:
+
+- `pub(crate)`: visible anywhere in the current crate, never exported. The most common choice for internal helpers in a library.
+- `pub(super)`: visible to the parent module.
+- `pub(in crate::some::path)`: visible inside a specific ancestor.
+
+<Playground title="pub(crate) and pub(super)">
+```rust
+mod app {
+    pub mod config {
+        // visible everywhere in this crate, but not to downstream crates
+        pub(crate) const MAX_USERS: usize = 100;
+
+        pub mod parser {
+            // visible to the parent module (`config`) only
+            pub(super) fn parse_line(line: &str) -> Option<(&str, &str)> {
+                line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+            }
+        }
+
+        pub fn load(text: &str) -> Vec<(String, String)> {
+            text.lines()
+                .filter_map(parser::parse_line)
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+    }
+}
+
+fn main() {
+    let cfg = app::config::load("name = demo\nport = 8080");
+    println!("{cfg:?}, max users: {}", app::config::MAX_USERS);
+    // app::config::parser::parse_line("a=b"); // error: function is private
+}
+```
+</Playground>
+
+<Callout type="compare" from="Java / TypeScript">
+Java's `private` is per class and `package-private` is per directory; TypeScript's `private` is per class and `export` is per file. Rust has one unit of encapsulation, the **module**, and one escape hatch per level (`pub(super)`, `pub(crate)`, `pub`). A type's internals are hidden from other modules, not from other types in the same module, which is why tests usually live in a child module: they can see everything.
+</Callout>
+
+## Crates and packages
+
+A **crate** is a compilation unit: one tree of modules, compiled into a library (`lib.rs`) or an executable (`main.rs`). A **package** is what `Cargo.toml` describes: at most one library crate, any number of binaries (`src/bin/*.rs`), plus examples, tests and benches.
+
+The usual layout for an application is a thin `main.rs` that parses arguments and calls into `lib.rs`. The library is then testable, and the binary is just one consumer of it. In `main.rs` you refer to the library by the package name, exactly as an external user would: `use timeparse::parse_time;`.
+
+## Workspaces, dependencies and features
+
+A **workspace** groups several packages that share one `Cargo.lock` and one `target/` directory, so dependencies are resolved and compiled once:
+
+```toml
+# Cargo.toml at the repository root
+[workspace]
+members = ["core", "cli", "server"]
+resolver = "3"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+```
+
+```toml
+# server/Cargo.toml
+[package]
+name = "server"
+version = "0.3.1"
+edition = "2024"
+
+[dependencies]
+core = { path = "../core" }
+serde = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+
+[features]
+default = ["async"]
+async = ["dep:tokio"]
+```
+
+- **Version requirements are SemVer ranges.** `"1.0"` means `>=1.0.0, <2.0.0`. Cargo picks the newest compatible version and records the exact one in `Cargo.lock`. Commit the lock file: it makes your builds and CI reproducible. For libraries it only affects your own builds, since downstream users resolve versions with their own lock file.
+- **Features** are additive compile-time flags. Code is gated with `#[cfg(feature = "async")]`, and optional dependencies are only downloaded and compiled when a feature enables them. Because features are unified across the dependency graph, they must never remove functionality.
+- **One crate can appear in two major versions** in the same build (`rand 0.8` and `rand 0.9`). They are different crates as far as the compiler is concerned, so their types are not interchangeable, but nothing breaks.
+
+<Callout type="runtime">
+Each crate is compiled separately, and the result for a library is an `.rlib`: object code plus metadata describing its public items, generics and inlinable functions. Generic functions cannot be compiled ahead of time, so their MIR travels in the metadata and is monomorphized in the crate that uses them. That is why changing a widely used generic function recompiles its dependents, and why `cargo build` caches per crate in `target/`.
+</Callout>
+
+## Build profiles
+
+Profiles control how crates are compiled. `dev` is used by `cargo build` and `cargo run`, `release` by `--release`:
+
+```toml
+[profile.release]
+opt-level = 3       # default
+lto = "thin"        # link-time optimization across crates
+codegen-units = 1   # slower build, better optimization
+panic = "abort"     # smaller binary, no unwinding
+
+[profile.dev.package."*"]
+opt-level = 2       # optimize dependencies even in debug builds
+```
+
+The last block is a popular trick: your own code stays fast to compile and easy to debug, while heavy dependencies (image codecs, crypto, physics) run at near-release speed.
+
+## Key takeaways
+
+- Modules are declared with `mod`; files only hold their bodies. A file not reachable from the root is not compiled.
+- Everything is private by default. Private means visible in the declaring module and its descendants.
+- Every segment of a path must be visible; `pub use` re-exports items to build a clean public API.
+- Struct fields have their own visibility, which is how constructors and invariants are enforced.
+- A package holds at most one library and many binaries; a workspace shares a lock file and build directory across packages.
+- Dependencies use SemVer ranges pinned by `Cargo.lock`; features are additive and unified across the graph.

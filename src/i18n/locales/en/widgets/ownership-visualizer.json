@@ -1,0 +1,21 @@
+{
+  "title": "Ownership, step by step",
+  "subtitle": "Follow who owns the heap buffer at every line",
+  "prev": "Back",
+  "next": "Next",
+  "reset": "Restart",
+  "stack": "STACK",
+  "heap": "HEAP",
+  "moved": "moved",
+  "freed": "freed",
+  "steps": [
+    "<code>String::from</code> allocates 5 bytes on the heap. The <code>String</code> itself is a 24-byte struct on the stack (pointer, length, capacity) and <code>s1</code> is its <strong>owner</strong>.",
+    "<code>let s2 = s1</code> copies only the 24-byte header, not the heap bytes. Ownership <strong>moves</strong> to <code>s2</code>; <code>s1</code> is now statically invalid. No two variables ever own the same buffer.",
+    "Using <code>s1</code> after the move is rejected at compile time with <code>error[E0382]: borrow of moved value: `s1`</code>. There is no runtime check: the compiler simply refuses the program.",
+    "<code>clone()</code> is the explicit, visible way to duplicate heap data: a second allocation with its own owner, <code>s3</code>. In Rust, expensive copies never happen implicitly.",
+    "Passing <code>s3</code> by value moves it into the parameter <code>s</code> of <code>takes</code>. A new stack frame is pushed; the buffer now belongs to that frame.",
+    "When <code>takes</code> returns, its frame is popped and <code>s</code> goes out of scope: <code>drop</code> runs and the second buffer is freed, right here, deterministically.",
+    "Back in <code>main</code>, <code>s2</code> is still the owner of the first buffer and can be used normally. <code>s1</code> and <code>s3</code> were moved out, so they own nothing.",
+    "At the closing brace <code>s2</code> goes out of scope and its buffer is freed. The compiler knows <code>s1</code> and <code>s3</code> were moved, so nothing is freed twice and nothing leaks."
+  ]
+}

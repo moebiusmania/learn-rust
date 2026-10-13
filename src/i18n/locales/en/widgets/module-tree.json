@@ -1,0 +1,23 @@
+{
+  "title": "Who can see what?",
+  "subtitle": "Pick the module you are writing code in, then the item you want to use",
+  "from": "Code written in",
+  "target": "Wants to use",
+  "here": "you are here",
+  "vis": {
+    "priv": "private",
+    "super": "pub(super)",
+    "crate": "pub(crate)",
+    "pub": "pub"
+  },
+  "rule": {
+    "priv": "private: visible only inside <code>{scope}</code> and its descendants",
+    "super": "<code>pub(super)</code>: visible inside the parent module <code>{scope}</code> and its descendants",
+    "crate": "<code>pub(crate)</code>: visible anywhere in this crate, never in other crates",
+    "pub": "<code>pub</code>: visible anywhere its parent path is visible, other crates included"
+  },
+  "ok": "Accessible. Every segment of the path is visible from <code>{from}</code>.",
+  "blocked": "Error E0603 / E0451: <code>{item}</code> is private from here. The compiler stops at the first segment you cannot see.",
+  "stepOk": "visible",
+  "stepBlocked": "not visible"
+}

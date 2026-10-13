@@ -1,0 +1,14 @@
+{
+  "title": "Da .rs a codice macchina",
+  "subtitle": "Clicca su una fase, oppure avvia l'intera pipeline",
+  "play": "Avvia",
+  "pause": "Pausa",
+  "stages": [
+    { "name": "Sorgente", "short": ".rs", "text": "Il tuo crate: un albero di moduli che parte da <code>main.rs</code> o <code>lib.rs</code>. L'unità di compilazione è l'intero crate, non il singolo file." },
+    { "name": "AST", "short": "parse", "text": "I token vengono trasformati in un albero sintattico astratto. Qui si espandono le macro: <code>println!</code> diventa codice normale prima di qualsiasi controllo sui tipi." },
+    { "name": "HIR", "short": "tipi", "text": "L'IR di alto livello \"desugara\" i cicli <code>for</code>, l'operatore <code>?</code> e <code>async</code>. Su di essa girano risoluzione dei nomi, dei trait e inferenza dei tipi." },
+    { "name": "MIR", "short": "borrowck", "text": "L'IR di livello intermedio è un grafo di controllo di flusso. Qui gira il borrow checker, insieme all'inserimento dei drop e alle prime ottimizzazioni." },
+    { "name": "LLVM IR", "short": "codegen", "text": "I generici vengono monomorfizzati: una copia per ogni tipo concreto. LLVM poi ottimizza in modo aggressivo (inlining, vettorizzazione) come farebbe con il C++." },
+    { "name": "Binario", "short": "nativo", "text": "Un eseguibile nativo senza VM e senza garbage collector. La libreria standard è linkata staticamente; l'unico \"runtime\" è un sottile shim di avvio più il gestore dei panic." }
+  ]
+}

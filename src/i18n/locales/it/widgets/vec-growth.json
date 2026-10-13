@@ -1,0 +1,30 @@
+{
+  "title": "Dentro un Vec<i32>",
+  "subtitle": "Esegui push, pop e shrink, e osserva il buffer sullo heap",
+  "push": "push",
+  "push10": "push ×10",
+  "pop": "pop",
+  "shrink": "shrink_to_fit",
+  "clear": "clear",
+  "stack": "STACK",
+  "heap": "HEAP",
+  "freed": "liberato",
+  "len": "len",
+  "capacity": "capacity",
+  "heapBytes": "byte sullo heap",
+  "reallocs": "riallocazioni",
+  "bytesCopied": "byte copiati",
+  "captions": {
+    "initial": "<code>Vec::new()</code> non alloca: la capacità è 0 e il puntatore è un segnaposto \"dangling\" ma correttamente allineato. È il primo <code>push</code> ad allocare.",
+    "push": "<code>len</code> &lt; <code>capacity</code>, quindi il valore viene scritto nello spazio libero: nessuna allocazione, O(1).",
+    "pushRealloc": "Il buffer era pieno. Il Vec ha allocato un nuovo buffer di capacità <strong>{new}</strong> (prima {old}), vi ha spostato {bytes} byte e ha liberato quello vecchio. Raddoppiare mantiene <code>push</code> O(1) ammortizzato.",
+    "pop": "<code>pop</code> restituisce <code>Some(valore)</code> e decrementa <code>len</code>. La capacità resta disponibile per i push futuri.",
+    "popEmpty": "Il Vec è vuoto: <code>pop</code> restituisce <code>None</code>. Nessuna eccezione, nessun undefined.",
+    "shrink": "<code>shrink_to_fit</code> ha riallocato esattamente <code>len</code> elementi, restituendo {saved} byte all'allocatore.",
+    "shrinkNoop": "La capacità coincide già con la lunghezza, non c'è nulla da ridurre.",
+    "shrinkFree": "Con <code>len == 0</code>, lo shrink libera completamente il buffer e il Vec torna allo stato senza allocazione.",
+    "clear": "<code>clear</code> esegue il drop di ogni elemento e porta <code>len</code> a 0, ma mantiene l'allocazione: riempirlo di nuovo non richiede riallocazioni.",
+    "full": "Questa demo si ferma a {max} elementi, ma un vero Vec continua a raddoppiare finché c'è memoria.",
+    "firstAlloc": "Il primo <code>push</code> alloca un buffer per <strong>4</strong> elementi (16 byte): una capacità minima che evita riallocazioni per vettori piccoli."
+  }
+}

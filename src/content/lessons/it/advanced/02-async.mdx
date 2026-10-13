@@ -1,0 +1,257 @@
+---
+title: Async Rust dietro le quinte
+description: Le future come macchine a stati, poll e waker, perché non c'è un runtime integrato, Pin, e quando scegliere async invece dei thread.
+duration: 30
+tags: [async, Future, Waker, Pin, Tokio]
+---
+
+`async`/`await` in Rust somiglia alla sintassi che conosci da JavaScript, C# o Python. Il modello sottostante però è molto diverso: **nel linguaggio non c'è nessun event loop**, le future **non fanno nulla finché non vengono interrogate** (poll), e una `async fn` viene compilata in una normale struct la cui dimensione è nota in compilazione. Capire questi tre fatti spiega quasi ogni errore sorprendente che incontrerai.
+
+## Una async fn è una macchina a stati
+
+Quando scrivi
+
+```rust
+async fn job() -> usize {
+    let a = read_socket().await;
+    let b = read_file().await;
+    a.len() + b.len()
+}
+```
+
+il compilatore non crea una coroutine con un proprio stack. Genera un tipo anonimo, più o meno un `enum` con una variante per ogni punto di sospensione, che contiene le variabili locali che devono sopravvivere a ogni `.await`:
+
+```rust
+enum JobFuture {
+    Start,
+    AwaitingSocket { fut: ReadSocket },
+    AwaitingFile { a: String, fut: ReadFile },
+    Done,
+}
+```
+
+Quel tipo implementa il trait `Future`, il cui unico metodo è `poll`:
+
+```rust
+pub trait Future {
+    type Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+}
+
+pub enum Poll<T> { Ready(T), Pending }
+```
+
+Ogni chiamata a `poll` fa avanzare la macchina il più possibile. Se arriva a un `.await` la cui future interna non è pronta, restituisce `Poll::Pending`; quando il corpo della funzione termina restituisce `Poll::Ready(valore)`.
+
+<Callout type="compare" from="JavaScript / C#">
+Una `Promise` di JavaScript o un `Task` di C# iniziano a girare appena creati e sono guidati da un runtime integrato nella piattaforma. Una future di Rust è **pigra**: chiamare `job()` costruisce soltanto la macchina a stati. Se non la attendi mai con `.await` e non la consegni a un executor, il suo corpo non viene mai eseguito, e il compilatore ti avvisa con `unused future must be used`.
+</Callout>
+
+## Fare poll a mano
+
+La libreria standard definisce `Future`, `Poll`, `Context` e `Waker`, ma **non include alcun executor**. Per vedere il meccanismo, ecco un programma completo con una future scritta a mano e il più piccolo executor possibile: un ciclo che chiama `poll` finché il risultato non è pronto.
+
+<Playground title="Una future, un waker e un executor in 10 righe">
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+
+/// Una future che richiede `left` poll aggiuntivi prima di completarsi,
+/// al posto di "attendere su un socket".
+struct Countdown {
+    left: u32,
+}
+
+impl Future for Countdown {
+    type Output = &'static str;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.left == 0 {
+            return Poll::Ready("fatto");
+        }
+        println!("    poll -> Pending (ne mancano {})", self.left);
+        self.left -= 1;
+        // Una vera future foglia consegna il waker al reactor del sistema.
+        // Qui svegliamo subito: "fai di nuovo poll su di me".
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+async fn job() -> usize {
+    println!("  job: avviato");
+    let a = Countdown { left: 2 }.await; // punto di await #1
+    println!("  job: il primo await ha restituito {a}");
+    let b = Countdown { left: 1 }.await; // punto di await #2
+    a.len() + b.len()
+}
+
+/// Il più piccolo executor possibile: poll finché non è Ready.
+struct NoopWaker;
+impl Wake for NoopWaker {
+    fn wake(self: Arc<Self>) {}
+}
+
+fn block_on<F: Future>(fut: F) -> F::Output {
+    let mut fut = std::pin::pin!(fut);
+    let waker = Waker::from(Arc::new(NoopWaker));
+    let mut cx = Context::from_waker(&waker);
+    for polls in 1.. {
+        if let Poll::Ready(value) = fut.as_mut().poll(&mut cx) {
+            println!("executor: Ready dopo {polls} poll");
+            return value;
+        }
+    }
+    unreachable!()
+}
+
+fn main() {
+    let fut = job(); // ancora nessuna stampa: le future sono pigre
+    println!("future creata ({} byte), non avviata", std::mem::size_of_val(&fut));
+    let result = block_on(fut);
+    println!("risultato = {result}");
+}
+```
+</Playground>
+
+Guarda la prima riga dell'output: la future esiste e ha una dimensione fissa *prima* che venga stampato `job: avviato`. Il nostro `block_on` gira in un ciclo attivo, il che va bene per una demo ed è pessimo in produzione. Un executor reale **dorme** quando nessun task può avanzare e si affida al `Waker` per sapere quando rifare poll.
+
+## Executor, reactor e waker
+
+Un runtime di produzione come **Tokio** ha due metà:
+
+- L'**executor** mantiene una coda di task pronti ad avanzare e li interroga, su un solo thread o su un pool di worker.
+- Il **reactor** parla con il sistema operativo (`epoll` su Linux, `kqueue` su macOS, IOCP su Windows). Quando una future foglia, come la lettura da un socket, restituisce `Pending`, registra il `Waker` del task presso il reactor. Quando il sistema operativo segnala che il socket è leggibile, il reactor chiama `waker.wake()`, che rimette il task nella coda dei pronti.
+
+Segui il ciclo passo dopo passo qui sotto. Osserva come tre task condividono un solo thread, e come il thread lavori solo quando qualche task può davvero avanzare.
+
+<AsyncExecutor />
+
+<Callout type="runtime">
+Poiché il linguaggio non ha un runtime integrato, ne scegli uno come dipendenza: **Tokio** (lo standard de facto per i server), **smol** (piccolo e modulare), **embassy** (embedded, senza heap) oppure un executor a thread singolo in WebAssembly. Il costo è la frammentazione dell'ecosistema: una libreria scritta per i tipi di I/O di Tokio non gira automaticamente su un altro runtime. Il vantaggio è che async Rust funziona anche su un microcontrollore con 64 KB di RAM.
+</Callout>
+
+## Concorrenza con join, spawn e select
+
+Con un executor a disposizione, il codice `async` si legge come quello che conosci. La distinzione importante è tra **attendere in sequenza** ed **eseguire in modo concorrente**. Il playground ha Tokio disponibile, quindi questo esempio lo usa:
+
+<Playground title="Await in sequenza, join! e spawn">
+```rust
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
+
+async fn fetch(name: &str, ms: u64) -> String {
+    sleep(Duration::from_millis(ms)).await; // chiamata di rete simulata
+    name.to_string()
+}
+
+#[tokio::main]
+async fn main() {
+    let t = Instant::now();
+    let a = fetch("utenti", 200).await;
+    let b = fetch("ordini", 300).await;
+    println!("in sequenza: {a} + {b} in {} ms", t.elapsed().as_millis());
+
+    let t = Instant::now();
+    let (a, b) = tokio::join!(fetch("utenti", 200), fetch("ordini", 300));
+    println!("join!:       {a} + {b} in {} ms", t.elapsed().as_millis());
+
+    // spawn consegna un task al runtime, magari su un altro worker
+    let handles: Vec<_> = (1..=3u64)
+        .map(|id| tokio::spawn(async move { sleep(Duration::from_millis(50 * id)).await; id * 10 }))
+        .collect();
+    let mut sum = 0;
+    for h in handles {
+        sum += h.await.unwrap();
+    }
+    println!("i task avviati hanno restituito {sum}");
+}
+```
+</Playground>
+
+- `.await` uno dopo l'altro: il tempo totale è la **somma** (circa 500 ms).
+- `join!` interroga entrambe le future dentro lo stesso task: il tempo totale è il **massimo** (circa 300 ms).
+- `tokio::spawn` crea un **task** indipendente, schedulato dal runtime e magari spostato tra i worker. Restituisce un `JoinHandle` che puoi attendere.
+- `tokio::select!` (non mostrato) mette in gara più future e scarta le perdenti: è così che funzionano timeout e cancellazione, perché distruggere una future la annulla.
+
+<Compare left="TypeScript">
+```ts
+async function main() {
+  const a = await fetch("users");
+  const b = await fetch("orders");
+
+  const [c, d] = await Promise.all([
+    fetch("users"),
+    fetch("orders"),
+  ]);
+}
+```
+
+```rust
+#[tokio::main]
+async fn main() {
+    let a = fetch("users").await;
+    let b = fetch("orders").await;
+
+    let (c, d) = tokio::join!(
+        fetch("users"),
+        fetch("orders"),
+    );
+}
+```
+</Compare>
+
+## Vincoli Send e runtime multi-thread
+
+Il runtime di default di Tokio è multi-thread e usa il work stealing: un task sospeso sul worker 1 può riprendere sul worker 3. Per questo `tokio::spawn` richiede che la future sia `Send`, e una future è `Send` solo se **tutto ciò che tiene in vita attraverso un `.await`** è `Send`.
+
+<Playground title="Un Rc tenuto attraverso un .await" expectError>
+```rust
+use std::rc::Rc;
+
+#[tokio::main]
+async fn main() {
+    let handle = tokio::spawn(async {
+        let shared = Rc::new(42);
+        tokio::task::yield_now().await; // `shared` è vivo attraverso questo .await
+        println!("{shared}");
+    });
+    handle.await.unwrap();
+}
+```
+</Playground>
+
+L'errore, *future cannot be sent between threads safely*, indica esattamente il `.await` in cui l'`Rc` è ancora vivo. Le soluzioni sono usare `Arc`, distruggere il valore prima del `.await`, oppure eseguire il task su un `LocalSet` a thread singolo. La stessa regola spiega un classico: tenere una `std::sync::MutexGuard` attraverso un `.await` rende la future non `Send` (e potrebbe comunque bloccare il worker). Usa `tokio::sync::Mutex` oppure rilascia prima la guard.
+
+## Perché esiste Pin
+
+La macchina a stati memorizza le variabili locali come campi. Se una variabile locale prende in prestito un'altra (`let r = &buf;` e poi un `.await`), la struct generata contiene un puntatore **verso sé stessa**. Spostare in memoria una struct del genere lascerebbe quel puntatore pendente.
+
+`Pin<&mut Self>` è la promessa che il valore non verrà più spostato dopo il primo poll. Ecco perché `poll` riceve `self: Pin<&mut Self>`, perché il nostro executor chiama `std::pin::pin!` prima di fare poll, e perché a volte serve `Box::pin` per mettere future dentro le collezioni. La maggior parte dei tipi è `Unpin` (spostarli va sempre bene) e per loro `Pin` non ha alcun effetto; conta solo per le future autoreferenziali, e raramente ci avrai a che fare al di fuori del codice di executor o combinatori.
+
+## Async o thread?
+
+| | Thread del SO | Task async |
+| --- | --- | --- |
+| Memoria per unità | uno stack (spesso 2–8 MB riservati) | la dimensione della macchina a stati (da byte a KB) |
+| Cambio di contesto | context switch del kernel | un ritorno di funzione e una chiamata |
+| Adatti a | lavoro CPU-bound, librerie bloccanti | molte attese di I/O concorrenti (socket, timer) |
+| Trappola | migliaia di thread costano cari | una chiamata bloccante ferma l'intero worker |
+
+Async conviene quando attendi su migliaia di connessioni. Per il calcolo intensivo usa i thread o Rayon. Quando un task async deve eseguire qualcosa di bloccante o pesante per la CPU, affidalo a `tokio::task::spawn_blocking` così da non congelare gli altri task di quel worker.
+
+<Callout type="warn" title="Non bloccare mai dentro codice async">
+`std::thread::sleep`, l'I/O sincrono sui file o un calcolo lungo dentro una `async fn` non cedono il controllo: il thread dell'executor resta bloccato e tutti gli altri task su di esso aspettano. Usa gli equivalenti async del runtime (`tokio::time::sleep`, `tokio::fs`) oppure `spawn_blocking`.
+</Callout>
+
+## Punti chiave
+
+- Una `async fn` viene compilata in una macchina a stati di dimensione fissa che implementa `Future`; le variabili locali che attraversano un `.await` diventano campi.
+- Le future sono pigre e vengono guidate da `poll`, che restituisce `Ready` o `Pending`.
+- Un `Waker` è il modo in cui una future foglia dice all'executor "rifai poll su di me"; il reactor sveglia i task quando il sistema operativo segnala che l'I/O è pronto.
+- Il linguaggio non include un runtime: Tokio, smol o embassy sono librerie che scegli tu.
+- `join!` esegue future in modo concorrente dentro un task; `spawn` crea task indipendenti, che su un runtime multi-thread devono essere `Send`.
+- `Pin` garantisce che le future autoreferenziali non vengano spostate dopo l'inizio del poll.
+- Usa async per tante attese di I/O, i thread per il lavoro CPU-bound, e non bloccare mai un thread dell'executor.

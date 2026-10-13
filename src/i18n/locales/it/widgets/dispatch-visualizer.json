@@ -1,0 +1,25 @@
+{
+  "title": "Dispatch statico e dinamico",
+  "subtitle": "Segui una chiamata a notify() nel codice generato",
+  "static": "Statico (generici)",
+  "dynamic": "Dinamico (dyn Trait)",
+  "value": "Valore",
+  "call": "Anima la chiamata",
+  "caller": "punto di chiamata",
+  "fatPointer": "&dyn Notify (fat pointer)",
+  "dataPtr": "ptr dati",
+  "vtablePtr": "ptr vtable",
+  "vtable": "vtable",
+  "data": "dati",
+  "copies": "copie monomorfizzate",
+  "staticFacts": [
+    "Una copia di <code>notify</code> per ogni tipo concreto, generata in compilazione.",
+    "La chiamata è un salto diretto a un indirizzo noto: LLVM può metterla inline.",
+    "<code>&amp;Email</code> è un puntatore sottile: 8 byte su 64 bit."
+  ],
+  "dynamicFacts": [
+    "Una sola copia di <code>notify</code>, condivisa da tutti i tipi.",
+    "La chiamata carica un puntatore a funzione dalla vtable e poi salta: niente inlining attraverso di essa.",
+    "<code>&amp;dyn Notify</code> è un fat pointer: 16 byte (dati + vtable)."
+  ]
+}

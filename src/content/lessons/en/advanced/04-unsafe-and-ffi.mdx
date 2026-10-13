@@ -1,0 +1,201 @@
+---
+title: Unsafe Rust and FFI
+description: What unsafe actually unlocks, raw pointers, building safe abstractions, undefined behaviour and Miri, and talking to C in both directions.
+duration: 30
+tags: [unsafe, raw pointers, FFI, C ABI, Miri]
+---
+
+Safe Rust is a deliberately limited language: the compiler must be able to *prove* that your code is memory safe. Some correct programs are beyond what it can prove, such as a doubly linked list, a lock-free queue or a call into a C library. `unsafe` is the escape hatch. It is not a mode where anything goes; it is a small, explicit set of extra operations whose correctness **you** vouch for.
+
+## The five superpowers
+
+Inside an `unsafe` block or `unsafe fn` you may do exactly five things you cannot do elsewhere:
+
+1. Dereference a raw pointer (`*const T`, `*mut T`).
+2. Call an `unsafe` function or method, including foreign (C) functions.
+3. Access or modify a mutable `static`.
+4. Implement an `unsafe` trait, such as `Send` or `Sync`.
+5. Read a field of a `union`.
+
+That is the complete list. Everything else, including the borrow checker, type checking and lifetime checking, keeps working exactly as before. Writing `unsafe` around code that does not compile for a borrow error does not make it compile.
+
+<UnsafeBoundary />
+
+## Raw pointers
+
+Raw pointers are Rust's equivalent of C pointers: they can be null, dangling, unaligned or aliased, and the compiler tracks no lifetime for them. **Creating** one is safe; **dereferencing** one is not.
+
+<Playground title="Raw pointers">
+```rust
+fn main() {
+    let mut x = 10;
+    let p = &raw mut x; // creating a raw pointer is safe...
+    unsafe {
+        *p += 1; // ...dereferencing it is not
+        println!("x = {}", *p);
+    }
+
+    // Raw pointers may be null, dangling or unaligned: the type system
+    // does not care until you dereference them.
+    let bogus = 0x1234usize as *const i32;
+    println!("bogus = {bogus:p}, is_null = {}", bogus.is_null());
+}
+```
+</Playground>
+
+The `&raw mut x` syntax (stable since Rust 1.82) creates a raw pointer directly, without creating an intermediate `&mut` first. That matters for packed fields and for memory that is not yet initialized, where even a temporary reference would be undefined behaviour.
+
+## Building safe abstractions
+
+The idiomatic use of `unsafe` is not to sprinkle it through application code. It is to write a small function or type whose **interface is safe**, with the unsafe operations encapsulated and justified inside. The standard library is full of these: `Vec`, `String`, `HashMap`, `Rc`, `Mutex` all contain `unsafe` internally.
+
+The classic example is splitting a slice into two mutable halves. The borrow checker cannot see that the halves do not overlap:
+
+```rust
+fn split_at_mut(values: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
+    (&mut values[..mid], &mut values[mid..])
+    // error[E0499]: cannot borrow `*values` as mutable more than once at a time
+}
+```
+
+With raw pointers we can express what we know, check what we must, and document why it is correct:
+
+<Playground title="A safe split_at_mut built on unsafe">
+```rust
+use std::slice;
+
+/// Splits one mutable slice into two non-overlapping mutable halves.
+fn split_at_mut(values: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
+    let len = values.len();
+    assert!(mid <= len, "mid out of bounds");
+    let ptr = values.as_mut_ptr();
+    // SAFETY: `mid <= len` is checked above, so both ranges are inside the
+    // original allocation, and they do not overlap, so two `&mut` are sound.
+    unsafe {
+        (
+            slice::from_raw_parts_mut(ptr, mid),
+            slice::from_raw_parts_mut(ptr.add(mid), len - mid),
+        )
+    }
+}
+
+fn main() {
+    let mut data = [1, 2, 3, 4, 5, 6];
+    let (left, right) = split_at_mut(&mut data, 2);
+    left[0] = 100;
+    right[0] = 300;
+    println!("{data:?}");
+}
+```
+</Playground>
+
+Three conventions make this code reviewable:
+
+- **The `assert!` is not optional.** The function is safe to call, so it must be sound for *every* input, including a wrong `mid`. Remove the check and safe code could read out of bounds.
+- **A `// SAFETY:` comment** explains why each unsafe operation's preconditions hold. Clippy can enforce it (`clippy::undocumented_unsafe_blocks`).
+- **`unsafe fn` documents a `# Safety` section** listing what callers must guarantee. Being inside an `unsafe fn` does not excuse the body: since edition 2024 the `unsafe_op_in_unsafe_fn` lint warns by default, so you still wrap each unsafe operation in its own block, with its own justification.
+
+<Callout type="compare" from="C / C++">
+In C every pointer dereference is "unsafe" and nothing marks it. In Rust the unsafe surface is greppable: a 50 000-line crate may contain a dozen `unsafe` blocks, and that is where reviewers, fuzzers and Miri concentrate. A memory bug in safe code is, by definition, a bug in one of those blocks (or in the compiler).
+</Callout>
+
+## Undefined behaviour and Miri
+
+Breaking an unsafe precondition causes **undefined behaviour** (UB): the optimizer assumes it cannot happen, so the program can do anything, including appearing to work. Rust's list of UB is stricter than C's in some places. Examples:
+
+- Dereferencing a dangling, null or unaligned pointer.
+- Producing an invalid value: a `bool` that is not 0 or 1, a `char` outside Unicode, a null `&T`, an enum with an unknown discriminant.
+- Creating a `&mut T` while another reference to the same data is alive, even if you never use it. Aliasing rules apply to references created in unsafe code too.
+- A data race, which safe code makes impossible.
+
+Because UB may be silent, the Rust project maintains **Miri**, an interpreter for MIR that detects most of these at runtime:
+
+```sh
+rustup +nightly component add miri
+cargo +nightly miri test
+```
+
+Run your tests under Miri whenever you write `unsafe`. It catches out-of-bounds accesses, use-after-free, invalid values and violations of the aliasing model that would never crash on your machine.
+
+<Callout type="runtime">
+Why is UB so dangerous in Rust specifically? Because the compiler emits strong guarantees to LLVM. Every `&mut T` is marked `noalias`, every `&T` to frozen data is marked read-only, every reference is `nonnull` and `dereferenceable`. These annotations power optimizations C compilers cannot do. If unsafe code breaks them, LLVM's transformations become wrong in ways that are very hard to debug.
+</Callout>
+
+## FFI: calling C from Rust
+
+Rust speaks the C ABI natively. You declare foreign functions in an `extern "C"` block and call them like any other function. Since **edition 2024** the block itself must be marked `unsafe extern`, because by writing it you assert the signatures are correct, something the compiler cannot verify. Items with no preconditions can be marked `safe`.
+
+<Playground title="Calling libc and exporting a C symbol">
+```rust
+use std::ffi::{CStr, c_char, c_int};
+
+// Edition 2024: extern blocks must be marked `unsafe`, because the
+// compiler cannot check that these signatures match the C library.
+unsafe extern "C" {
+    safe fn abs(x: c_int) -> c_int; // no preconditions: callable from safe code
+    fn strlen(s: *const c_char) -> usize; // needs a valid NUL-terminated pointer
+}
+
+// Exported with the C ABI and an unmangled symbol, callable from C.
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn main() {
+    println!("abs(-42) = {}", abs(-42));
+
+    let greeting: &CStr = c"ciao from C";
+    // SAFETY: `CStr` guarantees a NUL-terminated buffer that outlives the call.
+    let n = unsafe { strlen(greeting.as_ptr()) };
+    println!("strlen = {n}");
+
+    println!("rust_add = {}", rust_add(2, 3));
+}
+```
+</Playground>
+
+Things to notice:
+
+- `c"..."` literals (Rust 1.77+) produce a `&CStr`, NUL-terminated, ready for C.
+- `CString` and `CStr` convert between Rust strings (length-prefixed, no NUL, UTF-8) and C strings (NUL-terminated, any bytes).
+- `#[unsafe(no_mangle)]` keeps the symbol name `rust_add` so a C linker can find it. In edition 2024 it is spelled with `unsafe(...)` because exporting a symbol can clash with others.
+- Structs crossing the boundary need `#[repr(C)]`, as you saw in the previous lesson.
+
+<Compare left="C">
+```c
+/* mylib.h */
+#include <stdint.h>
+int32_t rust_add(int32_t a, int32_t b);
+
+/* main.c */
+#include "mylib.h"
+int main(void) {
+    return rust_add(2, 3) == 5 ? 0 : 1;
+}
+```
+
+```rust
+// Cargo.toml: [lib] crate-type = ["cdylib"]
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_add(a: i32, b: i32) -> i32 {
+    a + b
+}
+// cbindgen can generate mylib.h from this
+```
+</Compare>
+
+You rarely write large `extern` blocks by hand. **bindgen** generates Rust declarations from C headers, and **cbindgen** generates C headers from your Rust API. Higher-level crates such as **PyO3** (Python), **napi-rs** (Node.js), **jni** (Java) and **cxx** (C++) build safe, idiomatic bridges on top of the same C ABI, which is how Rust ends up inside Python packages, npm modules and browsers.
+
+<Callout type="warn" title="Panics must not cross the FFI boundary">
+Unwinding a Rust panic into C frames is undefined behaviour unless you use the `extern "C-unwind"` ABI. In functions exported to C, catch panics with `std::panic::catch_unwind` and convert them into error codes, or build with `panic = "abort"`.
+</Callout>
+
+## Key takeaways
+
+- `unsafe` unlocks five operations; the borrow checker and type system stay fully active.
+- Creating raw pointers is safe, dereferencing them is not; `&raw const` / `&raw mut` avoid intermediate references.
+- Idiomatic unsafe code is wrapped in small, safe abstractions with checks and `// SAFETY:` comments.
+- Undefined behaviour includes invalid values and aliasing violations, not just bad pointers; run unsafe code under Miri.
+- FFI uses the C ABI: `unsafe extern "C"` blocks to call C, `#[unsafe(no_mangle)] extern "C" fn` to be called, `#[repr(C)]` for shared structs.
+- Use bindgen, cbindgen or higher-level bridges instead of hand-written bindings, and never let a panic unwind into C.

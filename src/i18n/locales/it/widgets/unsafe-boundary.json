@@ -1,0 +1,26 @@
+{
+  "title": "Dove comincia unsafe?",
+  "subtitle": "Scegli un'operazione per vedere se richiede unsafe e cosa devi garantire",
+  "operations": "Operazioni",
+  "layers": {
+    "safe": "Rust safe · lo dimostra il compilatore",
+    "unsafe": "unsafe { } · lo dimostri tu",
+    "raw": "Memoria grezza e FFI"
+  },
+  "safe": "Safe",
+  "needsUnsafe": "Richiede unsafe",
+  "invariant": "Cosa deve valere",
+  "ops": {
+    "index": { "label": "Indicizzare un Vec", "text": "I limiti vengono controllati a runtime: un indice fuori range provoca un panic, non legge mai memoria altrui. Usa <code>get(i)</code> per ottenere invece un <code>Option</code>." },
+    "rawCreate": { "label": "Creare un puntatore grezzo", "text": "Creare, copiare, confrontare o stampare un puntatore grezzo è safe. Un puntatore è solo un indirizzo finché qualcuno non lo dereferenzia." },
+    "intToPtr": { "label": "Convertire un intero in puntatore", "text": "Anche questo è safe: il risultato può essere pendente o disallineato, ma tenerlo in mano è innocuo. Il pericolo comincia con la dereferenziazione." },
+    "forget": { "label": "Perdere memoria (leak)", "text": "Sorprendentemente safe. Un leak non può causare comportamento indefinito, quindi <code>mem::forget</code> e <code>Box::leak</code> sono funzioni safe. Memory safety ≠ assenza di leak." },
+    "deref": { "label": "Dereferenziare un puntatore grezzo", "text": "Il puntatore deve essere non nullo, allineato, puntare a un valore vivo e inizializzato di quel tipo, e non deve violare l'aliasing: nessun <code>&mut</code> vivo verso la stessa posizione mentre leggi o scrivi tramite il puntatore." },
+    "unsafeFn": { "label": "Chiamare una unsafe fn", "text": "Chi chiama deve rispettare le precondizioni documentate della funzione. Per <code>get_unchecked(i)</code>: <code>i &lt; len</code>, altrimenti legge fuori dai limiti." },
+    "staticMut": { "label": "Modificare una static mut", "text": "Nessun altro thread deve accedervi nello stesso momento e non deve esistere alcun riferimento vivo verso di essa. Nell'edizione 2024 i riferimenti a <code>static mut</code> vengono rifiutati: preferisci atomici, <code>Mutex</code> o <code>&raw mut</code>." },
+    "union": { "label": "Leggere un campo di una union", "text": "I byte memorizzati devono essere un valore valido per il tipo del campo. Leggere come <code>bool</code> un campo che contiene un <code>f32</code> potrebbe produrre un bool non valido, cioè comportamento indefinito." },
+    "unsafeImpl": { "label": "Implementare Send/Sync a mano", "text": "Prometti che il tipo è davvero sicuro da spostare o condividere tra thread. Il compilatore si fiderà di questa promessa ovunque il tipo venga usato." },
+    "ffi": { "label": "Chiamare una funzione C", "text": "La firma dichiarata deve corrispondere esattamente a quella in C, e ogni puntatore che passi deve rispettare il contratto della funzione C (valido, terminato da NUL, abbastanza grande, mai liberato due volte)." }
+  },
+  "stillChecked": "Dentro un blocco unsafe il borrow checker, il controllo dei tipi e i lifetime funzionano come sempre. unsafe sblocca soltanto le operazioni qui sopra."
+}

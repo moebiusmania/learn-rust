@@ -1,0 +1,14 @@
+{
+  "title": "Esploratore di interi",
+  "subtitle": "Scegli un tipo e due operandi, poi confronta le quattro strategie esplicite di overflow",
+  "type": "Tipo",
+  "a": "a",
+  "b": "b",
+  "range": "Intervallo",
+  "result": "bit dopo il wrap",
+  "sign": "bit di segno",
+  "none": "None",
+  "fits": "Il risultato {sum} sta in <code>{type}</code> (intervallo {min} … {max}). I quattro metodi concordano, e anche un semplice <code>a + b</code> andrebbe bene.",
+  "overflows": "Il risultato matematico {sum} <strong>non</strong> sta in <code>{type}</code> (intervallo {min} … {max}). Ogni metodo lo gestisce in modo diverso. Un semplice <code>a + b</code> andrebbe in panic in una build di debug e farebbe wrap in silenzio in release.",
+  "signedNote": "I tipi con segno usano il complemento a due: il bit più alto ha peso negativo (−2<sup>n−1</sup>)."
+}

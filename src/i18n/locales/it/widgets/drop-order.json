@@ -1,0 +1,62 @@
+{
+  "title": "L'ordine dei drop, passo per passo",
+  "subtitle": "I valori vivi sullo stack e l'output stampato dal programma",
+  "prev": "Precedente",
+  "next": "Successivo",
+  "restart": "Ricomincia",
+  "stack": "Valori vivi",
+  "log": "Output del programma",
+  "empty": "ancora nessun output",
+  "noValues": "nessun valore vivo",
+  "step": "Passo {n} di {total}",
+  "noisyNote": "Noisy(nome) stampa \"drop nome\" quando viene rilasciato",
+  "presets": [
+    {
+      "label": "Scope annidati",
+      "steps": [
+        "<code>a</code> viene creato ed è posseduto dallo scope di <code>main</code>.",
+        "Entrare in un blocco apre un nuovo scope. <code>b</code> viene messo sopra <code>a</code>.",
+        "<code>c</code> è dichiarato dopo <code>b</code>, quindi sta sopra di lui.",
+        "Il blocco finisce. Le variabili locali vengono rilasciate in <strong>ordine inverso di dichiarazione</strong>: prima <code>c</code>…",
+        "…poi <code>b</code>. Niente dello scope interno sopravvive alla graffa di chiusura.",
+        "Di nuovo in <code>main</code>, <code>d</code> viene dichiarato dopo <code>a</code>.",
+        "<code>main</code> ritorna: <code>d</code> viene rilasciato per primo, essendo la variabile più recente…",
+        "…e <code>a</code> per ultimo. L'ordine è completamente determinato dal codice sorgente: non lo decide nessun collector."
+      ]
+    },
+    {
+      "label": "Campi di struct",
+      "steps": [
+        "<code>x</code> è una semplice variabile locale.",
+        "<code>p</code> possiede due campi. I campi non sono variabili locali separate: vivono dentro <code>p</code>.",
+        "Alla fine di <code>main</code>, <code>p</code> va per primo (dichiarato per ultimo). Il suo <code>Drop::drop</code> gira <em>prima</em> dei suoi campi, quando sono ancora utilizzabili.",
+        "Poi i campi vengono rilasciati in <strong>ordine di dichiarazione</strong> (non inverso!): <code>first</code>…",
+        "…poi <code>second</code>. Ora di <code>p</code> non resta nulla.",
+        "Infine <code>x</code>, la variabile locale più vecchia."
+      ]
+    },
+    {
+      "label": "Vec di elementi",
+      "steps": [
+        "Il <code>Vec</code> vive sullo stack (puntatore, lunghezza, capacità); i suoi tre elementi vivono in un buffer sullo heap che possiede.",
+        "<code>t</code> è dichiarato dopo <code>v</code>.",
+        "Ordine inverso di dichiarazione: <code>t</code> viene rilasciato per primo.",
+        "Rilasciare un <code>Vec</code> rilascia i suoi elementi <strong>dal primo all'ultimo</strong>: <code>v0</code>…",
+        "…<code>v1</code>…",
+        "…<code>v2</code>, e poi viene liberato il buffer sullo heap."
+      ]
+    },
+    {
+      "label": "Unwinding da panic",
+      "steps": [
+        "<code>_m</code> è una guardia nel frame di <code>main</code>.",
+        "<code>main</code> chiama <code>inner()</code>: viene aggiunto un nuovo frame.",
+        "<code>_g</code> vive nel frame di <code>inner</code>.",
+        "<code>panic!</code> esegue il panic hook, che stampa il messaggio su stderr. Poi inizia l'unwinding.",
+        "L'unwinding risale lo stack delle chiamate eseguendo i distruttori frame per frame: prima <code>_g</code>.",
+        "Poi le variabili di <code>main</code>. Le guardie (lock, file, transazioni) vengono rilasciate anche in caso di panic. <code>never printed</code> non viene mai raggiunto.",
+        "Il panic è arrivato in cima al thread principale: il processo termina con codice 101. Con <code>panic = \"abort\"</code> nessuno di questi drop verrebbe eseguito."
+      ]
+    }
+  ]
+}

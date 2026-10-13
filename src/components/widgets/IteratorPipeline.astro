@@ -1,0 +1,375 @@
+---
+/**
+ * Canvas animation of a lazy iterator chain:
+ * (1..=10).filter(pred).map(|x| x * 10).take(3).collect()
+ * Items are pulled one at a time and travel the whole chain before the
+ * next one is requested; once take(3) is satisfied nothing else is pulled.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string; play: string; pause: string; step: string; reset: string;
+  predicate: string; pulled: string; collected: string; done: string; idle: string;
+  rejected: string; mapped: string; taken: string; stages: string[];
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'iterator-pipeline');
+const preds = [
+  { id: 'even', code: 'x % 2 == 0' },
+  { id: 'gt4', code: 'x > 4' },
+  { id: 'odd', code: 'x % 2 == 1' },
+];
+const client = { play: s.play, pause: s.pause, done: s.done, idle: s.idle, rejected: s.rejected, mapped: s.mapped, taken: s.taken, stages: s.stages };
+---
+<WidgetFrame tag="iterator-pipeline" title={s.title} subtitle={s.subtitle} icon="threads" data-strings={JSON.stringify(client)}>
+  <div class="widget-controls">
+    <span class="ip-label">{s.predicate}</span>
+    <div class="seg" role="group" aria-label={s.predicate}>
+      {preds.map((p, i) => <button type="button" data-pred={p.id} data-code={p.code} aria-pressed={i === 0 ? 'true' : 'false'}><code>{p.code}</code></button>)}
+    </div>
+  </div>
+  <pre class="ip-code"><code><span class="tok-num">(1..=10)</span>.<span class="tok-fn">filter</span>(|&amp;x| <span data-code-slot>x % 2 == 0</span>)
+    .<span class="tok-fn">map</span>(|x| x * <span class="tok-num">10</span>)
+    .<span class="tok-fn">take</span>(<span class="tok-num">3</span>)
+    .<span class="tok-fn">collect</span>::&lt;<span class="tok-type">Vec</span>&lt;_&gt;&gt;()</code></pre>
+  <canvas class="widget-canvas ip-canvas" role="img" aria-label={s.title}></canvas>
+  <div class="ip-stats">
+    <span><strong data-pulled>0</strong> {s.pulled}</span>
+    <span>{s.collected}: <code data-collected>[]</code></span>
+  </div>
+  <p class="widget-caption" data-msg aria-live="polite">{s.idle}</p>
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm" data-toggle><Icon name="play" size={14} /><span>{s.play}</span></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-step><Icon name="next" size={14} />{s.step}</button>
+    <button type="button" class="btn btn-sm btn-ghost" data-reset><Icon name="reset" size={14} />{s.reset}</button>
+  </div>
+</WidgetFrame>
+
+<script>
+  type Phase = 'toFilter' | 'drop' | 'toMap' | 'toTake' | 'toCollect';
+  interface Item { v: number; w: number; x: number; y: number; alpha: number; phase: Phase; rejected: boolean }
+  interface Strings { play: string; pause: string; done: string; idle: string; rejected: string; mapped: string; taken: string; stages: string[] }
+
+  const PREDS: Record<string, (x: number) => boolean> = {
+    even: (x) => x % 2 === 0,
+    gt4: (x) => x > 4,
+    odd: (x) => x % 2 === 1,
+  };
+  const H = 200;
+  const LANE = 108;
+
+  class IteratorPipeline extends HTMLElement {
+    #s!: Strings;
+    #canvas!: HTMLCanvasElement;
+    #ctx!: CanvasRenderingContext2D;
+    #W = 640;
+    #colors: Record<string, string> = {};
+    #pred = 'even';
+    #predCode = 'x % 2 == 0';
+    #next = 0;
+    #item: Item | null = null;
+    #taken = 0;
+    #collected: number[] = [];
+    #done = false;
+    #mode: 'paused' | 'playing' | 'stepping' = 'paused';
+    #raf = 0;
+    #last = 0;
+    #flash: { stage: number; t: number } | null = null;
+    #cleanup: (() => void)[] = [];
+
+    connectedCallback() {
+      this.#s = JSON.parse(this.dataset.strings!);
+      this.#canvas = this.querySelector('canvas')!;
+      this.#ctx = this.#canvas.getContext('2d')!;
+      this.#readColors();
+
+      const ro = new ResizeObserver(() => this.#resize());
+      ro.observe(this.#canvas);
+      const mo = new MutationObserver(() => { this.#readColors(); this.#draw(); });
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      const mq = matchMedia('(prefers-color-scheme: dark)');
+      const onScheme = () => { this.#readColors(); this.#draw(); };
+      mq.addEventListener('change', onScheme);
+      this.#cleanup.push(() => ro.disconnect(), () => mo.disconnect(), () => mq.removeEventListener('change', onScheme));
+
+      this.querySelectorAll<HTMLButtonElement>('[data-pred]').forEach((b) =>
+        b.addEventListener('click', () => {
+          this.#pred = b.dataset.pred!;
+          this.#predCode = b.dataset.code!;
+          this.querySelectorAll('[data-pred]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          this.querySelector('[data-code-slot]')!.textContent = b.dataset.code!;
+          this.#reset();
+        }),
+      );
+      this.querySelector('[data-toggle]')!.addEventListener('click', () => (this.#mode === 'playing' ? this.#pause() : this.#run('playing')));
+      this.querySelector('[data-step]')!.addEventListener('click', () => this.#run('stepping'));
+      this.querySelector('[data-reset]')!.addEventListener('click', () => this.#reset());
+      this.#reset();
+    }
+
+    disconnectedCallback() {
+      cancelAnimationFrame(this.#raf);
+      this.#cleanup.forEach((f) => f());
+    }
+
+    #readColors() {
+      // Custom properties hold light-dark(...) tokens; resolve them through a probe element.
+      const probe = document.createElement('span');
+      probe.style.display = 'none';
+      this.append(probe);
+      for (const name of ['accent', 'on-accent', 'text', 'text-muted', 'text-faint', 'surface', 'surface-3', 'border', 'border-strong', 'invalid', 'ok', 'heap']) {
+        probe.style.color = `var(--${name})`;
+        this.#colors[name] = getComputedStyle(probe).color;
+      }
+      probe.remove();
+    }
+
+    #resize() {
+      const rect = this.#canvas.getBoundingClientRect();
+      if (!rect.width) return;
+      this.#W = rect.width < 520 ? 440 : 640;
+      this.#canvas.style.aspectRatio = `${this.#W} / ${H}`;
+      const dpr = window.devicePixelRatio || 1;
+      const height = (rect.width * H) / this.#W;
+      this.#canvas.width = Math.round(rect.width * dpr);
+      this.#canvas.height = Math.round(height * dpr);
+      const k = (rect.width * dpr) / this.#W;
+      this.#ctx.setTransform(k, 0, 0, k, 0, 0);
+      this.#draw();
+    }
+
+    /** x centers: source, filter, map, take, collect */
+    get #xs() {
+      const W = this.#W;
+      return [0.105, 0.31, 0.5, 0.69, 0.895].map((f) => f * W);
+    }
+
+    #reset() {
+      cancelAnimationFrame(this.#raf);
+      this.#next = 0;
+      this.#item = null;
+      this.#taken = 0;
+      this.#collected = [];
+      this.#done = false;
+      this.#flash = null;
+      this.#setMode('paused');
+      this.#msg(this.#s.idle);
+      this.#stats();
+      this.#draw();
+    }
+
+    #setMode(m: 'paused' | 'playing' | 'stepping') {
+      this.#mode = m;
+      const btn = this.querySelector('[data-toggle]')!;
+      const playing = m === 'playing';
+      btn.querySelector('span')!.textContent = playing ? this.#s.pause : this.#s.play;
+      btn.querySelector('svg')!.innerHTML = playing ? '<path d="M8 5v14M16 5v14"/>' : '<path d="M7 4.5v15l12.5-7.5z"/>';
+    }
+
+    #run(m: 'playing' | 'stepping') {
+      if (this.#done) this.#reset();
+      cancelAnimationFrame(this.#raf);
+      this.#setMode(m);
+      this.#last = performance.now();
+      const loop = (now: number) => {
+        const dt = Math.min(48, now - this.#last);
+        this.#last = now;
+        const event = this.#tick(dt);
+        this.#draw();
+        if (this.#done || (event && this.#mode === 'stepping')) {
+          this.#setMode('paused');
+          // keep drawing briefly so the stage flash fades out
+          return;
+        }
+        if (this.#mode !== 'paused') this.#raf = requestAnimationFrame(loop);
+      };
+      this.#raf = requestAnimationFrame(loop);
+    }
+
+    #pause() {
+      cancelAnimationFrame(this.#raf);
+      this.#setMode('paused');
+    }
+
+    #msg(text: string) {
+      this.querySelector('[data-msg]')!.textContent = text;
+    }
+
+    #stats() {
+      this.querySelector('[data-pulled]')!.textContent = String(this.#next);
+      this.querySelector('[data-collected]')!.textContent = `[${this.#collected.join(', ')}]`;
+    }
+
+    #fmt(t: string, vars: Record<string, number>) {
+      return t.replace(/\{(\w+)\}/g, (_, k) => String(vars[k]));
+    }
+
+    /** Advances the simulation; returns true when a stage "event" happened. */
+    #tick(dt: number): boolean {
+      if (this.#flash) { this.#flash.t -= dt; if (this.#flash.t <= 0) this.#flash = null; }
+      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const speed = reduced ? 10 : 0.32 * (this.#W / 640);
+      const xs = this.#xs;
+      if (!this.#item) {
+        if (this.#next >= 10) { this.#done = true; return true; }
+        const v = this.#next + 1;
+        this.#next++;
+        this.#item = { v, w: v, x: xs[0]! + 40, y: LANE, alpha: 1, phase: 'toFilter', rejected: false };
+        this.#stats();
+        return false;
+      }
+      const it = this.#item;
+      const arrive = (target: number) => {
+        it.x = Math.min(target, it.x + speed * dt);
+        return it.x >= target;
+      };
+      switch (it.phase) {
+        case 'toFilter':
+          if (arrive(xs[1]!)) {
+            this.#flash = { stage: 1, t: 450 };
+            if (PREDS[this.#pred]!(it.v)) it.phase = 'toMap';
+            else { it.phase = 'drop'; it.rejected = true; this.#msg(this.#fmt(this.#s.rejected, { v: it.v })); return true; }
+          }
+          return false;
+        case 'drop':
+          it.y += speed * dt * 0.6;
+          it.alpha = Math.max(0, 1 - (it.y - LANE) / 60);
+          if (it.alpha <= 0) this.#item = null;
+          return false;
+        case 'toMap':
+          if (arrive(xs[2]!)) {
+            it.w = it.v * 10;
+            it.phase = 'toTake';
+            this.#flash = { stage: 2, t: 450 };
+            this.#msg(this.#fmt(this.#s.mapped, { v: it.v, w: it.w }));
+            return true;
+          }
+          return false;
+        case 'toTake':
+          if (arrive(xs[3]!)) {
+            this.#taken++;
+            it.phase = 'toCollect';
+            this.#flash = { stage: 3, t: 450 };
+            this.#msg(this.#fmt(this.#s.taken, { w: it.w, n: this.#taken }));
+            return true;
+          }
+          return false;
+        case 'toCollect':
+          if (arrive(xs[4]! - 40)) {
+            this.#collected.push(it.w);
+            this.#item = null;
+            this.#stats();
+            if (this.#taken >= 3) { this.#done = true; this.#msg(this.#s.done); return true; }
+          }
+          return false;
+      }
+    }
+
+    #draw() {
+      const ctx = this.#ctx;
+      const c = this.#colors;
+      const W = this.#W;
+      const xs = this.#xs;
+      ctx.clearRect(0, 0, W, H);
+      const mono = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // rail
+      ctx.strokeStyle = c['border-strong']!;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath();
+      ctx.moveTo(xs[0]! + 40, LANE);
+      ctx.lineTo(xs[4]! - 40, LANE);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // stage labels
+      ctx.font = `600 12px ${mono}`;
+      this.#s.stages.forEach((name, i) => {
+        ctx.fillStyle = c['text-muted']!;
+        ctx.fillText(name, xs[i]!, 40);
+      });
+
+      // middle stages
+      const spacing = xs[2]! - xs[1]!;
+      const pw = Math.min(84, spacing - 14);
+      for (let i = 1; i <= 3; i++) {
+        const lit = this.#flash?.stage === i;
+        this.#roundRect(xs[i]! - pw / 2, LANE - 20, pw, 40, 10);
+        ctx.fillStyle = lit ? c.accent! : c.surface!;
+        ctx.fill();
+        ctx.strokeStyle = lit ? c.accent! : c['border-strong']!;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = lit ? c['on-accent']! : c.text!;
+        if (i === 3) {
+          ctx.font = `700 13px ${mono}`;
+          ctx.fillText(`${this.#taken}/3`, xs[i]!, LANE);
+        } else {
+          ctx.font = `500 ${W < 600 ? 10 : 11}px ${mono}`;
+          ctx.fillText(i === 1 ? this.#predCode : 'x * 10', xs[i]!, LANE);
+        }
+      }
+
+      // source and collect boxes
+      for (const i of [0, 4]) {
+        this.#roundRect(xs[i]! - 40, LANE - 44, 80, 88, 12);
+        ctx.fillStyle = c.surface!;
+        ctx.fill();
+        ctx.strokeStyle = c.border!;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      const chip = (x: number, y: number, label: number, fill: string, fg: string, r = 9) => {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.fillStyle = fg;
+        ctx.font = `600 ${label >= 10 ? 9 : 10}px ${mono}`;
+        ctx.fillText(String(label), x, y + 0.5);
+      };
+      for (let v = this.#next + 1; v <= 10; v++) {
+        const k = v - 1;
+        chip(xs[0]! - 26 + (k % 3) * 26, LANE - 30 + Math.floor(k / 3) * 20, v, c['surface-3']!, c.text!);
+      }
+      this.#collected.forEach((w, k) => chip(xs[4]!, LANE - 26 + k * 26, w, c.ok!, c.surface!, 11));
+
+      // travelling item
+      const it = this.#item;
+      if (it) {
+        ctx.globalAlpha = it.alpha;
+        chip(it.x, it.y, it.w, it.rejected ? c.invalid! : c.accent!, c['on-accent']!, 14);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    #roundRect(x: number, y: number, w: number, h: number, r: number) {
+      const ctx = this.#ctx;
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+    }
+  }
+  customElements.define('iterator-pipeline', IteratorPipeline);
+</script>
+
+<style>
+  iterator-pipeline { display: block; }
+  .ip-label { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); }
+  .seg :global(code) { font-size: 0.75rem; }
+  .ip-code {
+    margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius);
+    background: var(--code-bg); border: 1px solid var(--code-border);
+    font-size: 0.8rem; line-height: 1.6; overflow-x: auto;
+  }
+  [data-code-slot] { color: var(--accent-strong); font-weight: 600; }
+  .ip-canvas { aspect-ratio: 640 / 200; }
+  .ip-stats {
+    display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); font-size: var(--step--1); color: var(--text-muted);
+    & strong { color: var(--accent-strong); font-family: var(--font-mono); }
+    & code { color: var(--text); }
+  }
+</style>

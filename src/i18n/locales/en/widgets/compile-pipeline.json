@@ -1,0 +1,14 @@
+{
+  "title": "From .rs to machine code",
+  "subtitle": "Click a stage, or play the whole pipeline",
+  "play": "Play",
+  "pause": "Pause",
+  "stages": [
+    { "name": "Source", "short": ".rs", "text": "Your crate: a tree of modules starting at <code>main.rs</code> or <code>lib.rs</code>. The whole crate is one compilation unit, not each file." },
+    { "name": "AST", "short": "parse", "text": "Tokens are parsed into an abstract syntax tree. Macros are expanded here, so <code>println!</code> becomes ordinary code before any type checking happens." },
+    { "name": "HIR", "short": "types", "text": "The high-level IR desugars <code>for</code> loops, <code>?</code> and <code>async</code>. Name resolution, trait resolution and type inference run on it." },
+    { "name": "MIR", "short": "borrowck", "text": "The mid-level IR is a control-flow graph. The borrow checker runs here, together with drop elaboration and the first optimizations." },
+    { "name": "LLVM IR", "short": "codegen", "text": "Generics are monomorphized: one copy per concrete type. LLVM then optimizes aggressively (inlining, vectorization) as it would for C++." },
+    { "name": "Binary", "short": "native", "text": "A native executable with no VM and no garbage collector. The standard library is statically linked; the only 'runtime' is a thin startup shim and the panic handler." }
+  ]
+}

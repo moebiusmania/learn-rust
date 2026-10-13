@@ -1,0 +1,138 @@
+---
+title: Toolchain, Cargo and the compilation model
+description: What you install, what Cargo does for you, and what happens between your .rs files and a native binary.
+duration: 15
+tags: [rustup, cargo, rustc, editions]
+---
+
+If you come from JavaScript, Python or Java, the first surprise is not the syntax: it is that **there is no runtime to install**. You install a *compiler toolchain*, and what it produces is a self-contained native executable.
+
+## The toolchain in one command
+
+Rust is distributed through **rustup**, a toolchain multiplexer (think `nvm` or `pyenv`, but official). A default install gives you:
+
+| Tool | Role | Closest equivalent |
+| --- | --- | --- |
+| `rustc` | The compiler | `javac`, `tsc`, `gcc` |
+| `cargo` | Build system + package manager + test runner | `npm` + `webpack` + `jest`, `mvn`, `go` |
+| `std` | Standard library, precompiled for your target | JDK class library |
+| `clippy` | Linter with hundreds of idiom checks | ESLint, Pylint |
+| `rustfmt` | Formatter, one canonical style | Prettier, gofmt, Black |
+| `rust-analyzer` | Language server for your editor | tsserver, Pylance |
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup update            # new stable every 6 weeks
+rustup target add wasm32-unknown-unknown   # cross-compile targets
+```
+
+<Callout type="note" title="Release channels and editions">
+A new **stable** version ships every six weeks, with a strong backwards-compatibility promise. Breaking *syntax* changes are batched into **editions** (2015, 2018, 2021, 2024), chosen per crate in `Cargo.toml`. Crates on different editions link together without problems, so the ecosystem never splits like Python 2 → 3.
+</Callout>
+
+## Cargo: one tool for the whole workflow
+
+Almost every Rust project is a **Cargo package**. You rarely call `rustc` directly.
+
+```sh
+cargo new hello        # creates Cargo.toml + src/main.rs + a git repo
+cd hello
+cargo run              # compile (debug) and execute
+cargo check            # type-check only: the fastest feedback loop
+cargo test             # build and run unit, integration and doc tests
+cargo build --release  # optimized build in target/release/
+cargo add serde        # add a dependency from crates.io
+```
+
+The manifest is TOML, and the lock file (`Cargo.lock`) pins exact versions, just like `package-lock.json`:
+
+```toml
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+```
+
+<Callout type="compare" from="npm / Maven">
+Dependencies are compiled **from source** into your binary, there is no shared runtime library folder like `node_modules` at execution time, nor a classpath. The output in `target/release/hello` runs on a machine that has never seen Rust.
+</Callout>
+
+## From source to machine code
+
+The unit of compilation is the **crate**, not the file. `rustc` takes the root file (`main.rs` or `lib.rs`), follows the `mod` declarations and compiles the whole tree at once. Step through the pipeline to see where each Rust feature lives:
+
+<CompilePipeline />
+
+Two consequences matter in daily work:
+
+1. **The borrow checker runs on MIR**, after type checking. That is why ownership errors appear only once your code already type-checks: fix type errors first, then lifetimes.
+2. **Generics are monomorphized** before LLVM: `Vec<i32>` and `Vec<String>` become two independent pieces of machine code. Abstractions are free at runtime, but compile times grow with how many concrete types you instantiate.
+
+<Callout type="runtime">
+"Rust has no runtime" is almost true. A Rust binary contains a tiny startup routine (set up the stack guard, collect `args`, call `main`), the memory allocator from the C library or one of your choice, and the **panic** machinery that unwinds the stack on fatal bugs. There is no garbage collector, no scheduler, no JIT and no reflection metadata.
+</Callout>
+
+## Hello, Rust
+
+Every executable starts at `fn main()`. `println!` ends with an exclamation mark because it is a **macro**: it checks the format string against the arguments *at compile time*.
+
+<Playground title="hello.rs">
+```rust
+fn main() {
+    let language = "Rust";
+    let year = 2015;
+    println!("Hello from {language}, stable since {year}!");
+
+    // Positional and debug formatting
+    let primes = [2, 3, 5, 7];
+    println!("{} primes: {:?}", primes.len(), primes);
+    println!("{:>8.3}|{:<6}|{:#x}", 3.14159, "left", 255);
+}
+```
+</Playground>
+
+Try removing the `year` variable and running again: the error comes from the compiler, not from a runtime crash, because the macro expanded into code that references `year`.
+
+<Compare left="TypeScript">
+```ts
+const language = "TypeScript";
+const primes = [2, 3, 5, 7];
+console.log(`Hello from ${language}`);
+console.log(primes.length, "primes:", primes);
+```
+
+```rust
+let language = "Rust";
+let primes = [2, 3, 5, 7];
+println!("Hello from {language}");
+println!("{} primes: {:?}", primes.len(), primes);
+```
+</Compare>
+
+`{}` uses the `Display` trait (user-facing output), `{:?}` uses `Debug` (developer output). Arrays implement `Debug` but not `Display`, so `{}` would not compile for `primes`: formatting is type-checked too.
+
+## Debug vs release
+
+<Playground title="Overflow is checked in debug builds">
+```rust
+fn main() {
+    let big: u8 = 255;
+    // std::hint::black_box hides the value from the optimizer
+    let next = std::hint::black_box(big) + 1;
+    println!("{next}");
+}
+```
+</Playground>
+
+In a **debug** build this panics with *attempt to add with overflow*. In **release** mode the check is removed and the value wraps to `0`. If you need a specific behaviour regardless of the profile, say so explicitly with `wrapping_add`, `checked_add` or `saturating_add`, which you will meet in the next lesson.
+
+## Key takeaways
+
+- `rustup` manages toolchains, `cargo` drives everything else: build, test, dependencies, docs.
+- The crate is the compilation unit; the output is a native, self-contained binary.
+- Borrow checking happens late in the pipeline, on MIR; generics are monomorphized before code generation.
+- Macros like `println!` are expanded at compile time, so even format strings are type-checked.
+- Debug and release builds differ in checks and speed: benchmark only in `--release`.

@@ -1,0 +1,17 @@
+{
+  "title": "Lazy iterator pipeline",
+  "subtitle": "Values are pulled one at a time through the whole chain",
+  "play": "Play",
+  "pause": "Pause",
+  "step": "Step",
+  "reset": "Reset",
+  "predicate": "filter",
+  "pulled": "pulled from source",
+  "collected": "collected",
+  "done": "take(3) is satisfied: the source is never asked for the remaining values.",
+  "idle": "Nothing happens until collect() starts pulling. Press Play or Step.",
+  "rejected": "{v} rejected by filter",
+  "mapped": "{v} mapped to {w}",
+  "taken": "{w} passes take ({n}/3)",
+  "stages": ["source", "filter", "map", "take(3)", "collect"]
+}

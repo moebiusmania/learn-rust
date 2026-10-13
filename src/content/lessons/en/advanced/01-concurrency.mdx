@@ -1,0 +1,239 @@
+---
+title: Fearless concurrency
+description: OS threads, Send and Sync, Arc and Mutex, atomics and channels, and why data races in Rust are compile errors.
+duration: 25
+tags: [threads, Send, Sync, Arc, Mutex, channels]
+---
+
+Every mainstream language lets you start threads. What Rust adds is a guarantee: **if your program compiles, it has no data races**. Not "probably none", not "none if you remember the lock": the same ownership and borrowing rules you already know are enough to rule them out, with two extra marker traits doing the bookkeeping.
+
+## Threads are plain OS threads
+
+`std::thread::spawn` creates a native OS thread, one-to-one, like `pthread_create` or `new Thread()` in Java. There is no green-thread scheduler, no global interpreter lock and no hidden pool.
+
+<Playground title="spawn and join">
+```rust
+use std::thread;
+use std::time::Duration;
+
+fn main() {
+    let names = vec!["alpha", "beta", "gamma"];
+    let mut handles = Vec::new();
+    for (i, name) in names.into_iter().enumerate() {
+        // `move` transfers ownership of `name` and `i` into the thread
+        handles.push(thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10 * (3 - i as u64)));
+            format!("{name} finished")
+        }));
+    }
+    for h in handles {
+        // join() waits and returns the closure's value (or the panic)
+        println!("{}", h.join().unwrap());
+    }
+}
+```
+</Playground>
+
+Three details are worth noticing:
+
+- The closure is `move`. `thread::spawn` requires `F: 'static`, because the new thread may outlive the function that started it. Borrowing a local would leave the thread with a dangling reference, so the compiler forces you to hand over ownership.
+- `JoinHandle<T>` is typed. `join()` returns `Result<T, _>`: the thread's return value, or the payload of its panic. A panicking thread does not take the process down, but you see it when you join.
+- Output order follows completion, not spawn order. Scheduling is the OS's business.
+
+<Callout type="compare" from="Java / Go">
+In Java any object can be reached from any thread, and correctness depends on discipline (`synchronized`, `volatile`, documentation). Go encourages channels but still compiles a program where two goroutines write the same map, and catches it only with the `-race` detector at runtime. Rust moves this check into the type system: unsynchronized shared mutation does not compile.
+</Callout>
+
+## A data race, rejected
+
+A data race needs three ingredients: two threads access the same memory, at least one writes, and nothing orders the accesses. In Rust, a mutable reference is *exclusive* by construction. Two threads both holding `&mut counter` is precisely what the borrow checker forbids.
+
+<Playground title="Two writers, no lock" expectError>
+```rust
+use std::thread;
+
+fn main() {
+    let mut counter = 0;
+    thread::scope(|s| {
+        s.spawn(|| for _ in 0..1000 { counter += 1; });
+        s.spawn(|| for _ in 0..1000 { counter += 1; });
+    });
+    println!("{counter}");
+}
+```
+</Playground>
+
+The error is `E0499: cannot borrow counter as mutable more than once at a time`, the same error you would get with two `&mut` in a single thread. Concurrency did not need new rules: aliasing XOR mutability already covers it. The widget below shows what happens in languages that *do* accept this program, and the two ways Rust lets you fix it.
+
+<DataRaceLab />
+
+## Send and Sync: the two traits behind it all
+
+How does `thread::spawn` know which values may cross into another thread? Its signature says it:
+
+```rust
+pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static;
+```
+
+- **`Send`**: a value of this type can be *moved* to another thread.
+- **`Sync`**: a value of this type can be *shared* between threads through `&T`. Formally, `T: Sync` exactly when `&T: Send`.
+
+Both are **auto traits**: the compiler implements them for your structs automatically if every field implements them. You almost never write them, you just inherit them. The interesting cases are the types that opt out:
+
+| Type | Send | Sync | Why |
+| --- | --- | --- | --- |
+| `i32`, `String`, `Vec<T>` | yes | yes | Plain owned data |
+| `Rc<T>` | no | no | Non-atomic reference count: two threads cloning it would corrupt the count |
+| `Arc<T>` | yes* | yes* | Atomic reference count (*if `T` is `Send + Sync`) |
+| `RefCell<T>` | yes | no | Its borrow flag is not thread-safe |
+| `Mutex<T>` | yes | yes | Access is serialized by the lock |
+| `*const T`, `*mut T` | no | no | The compiler cannot reason about raw pointers |
+
+Try sending an `Rc` to another thread and the compiler explains, in terms of these traits, why it refuses:
+
+```rust
+let data = Rc::new(vec![1, 2, 3]);
+let copy = Rc::clone(&data);
+thread::spawn(move || println!("{copy:?}"));
+// error[E0277]: `Rc<Vec<i32>>` cannot be sent between threads safely
+```
+
+<Callout type="runtime">
+`Send` and `Sync` exist only at compile time. They are *marker traits* with no methods, no vtable and no runtime representation. The thread-safety analysis costs nothing in the final binary: `Arc` is just a pointer, `Mutex` is a word for the lock state next to your data.
+</Callout>
+
+## Sharing state: Arc, Mutex, RwLock and atomics
+
+To share data you need two things: **shared ownership**, so the data lives as long as the last thread using it, and **synchronized mutation**. Rust gives you each as a separate building block, and you compose them:
+
+<Playground title="Arc<Mutex<T>>, scoped threads and atomics">
+```rust
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    // Shared ownership (Arc) + exclusive access (Mutex)
+    let counter = Arc::new(Mutex::new(0));
+    let mut handles = vec![];
+    for _ in 0..8 {
+        let counter = Arc::clone(&counter);
+        handles.push(thread::spawn(move || {
+            for _ in 0..1000 {
+                *counter.lock().unwrap() += 1; // guard unlocks at end of statement
+            }
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("mutex:  {}", *counter.lock().unwrap());
+
+    // Scoped threads may borrow from the stack: no Arc, no 'static
+    let total = AtomicUsize::new(0);
+    let words = vec!["a", "bb", "ccc", "dddd"];
+    thread::scope(|s| {
+        for w in &words {
+            s.spawn(|| total.fetch_add(w.len(), Ordering::Relaxed));
+        }
+    }); // every scoped thread is joined here
+    println!("atomic: {}", total.load(Ordering::Relaxed));
+}
+```
+</Playground>
+
+The key design choice is that **a Rust `Mutex` owns the data it protects**. You cannot reach the `i32` without calling `lock()`, and `lock()` returns a `MutexGuard` that dereferences to the data and releases the lock when dropped. Forgetting to lock, or unlocking twice, is not expressible.
+
+- `RwLock<T>`: many readers or one writer, the runtime version of `&T` vs `&mut T`.
+- `AtomicUsize`, `AtomicBool`, `AtomicPtr`… lock-free primitives backed by CPU instructions. The `Ordering` parameter (`Relaxed`, `Acquire`, `Release`, `SeqCst`) is the C++20 memory model, exposed as is.
+- `thread::scope` (stable since Rust 1.63) guarantees that every thread spawned inside it is joined before the scope returns. That is why those threads may borrow `words` and `total` from the stack without `Arc` or `'static`.
+
+<Callout type="warn" title="Deadlocks are still possible">
+Rust prevents data races, not every concurrency bug. Two threads locking two mutexes in opposite order can still deadlock, and a race *condition* in your logic (check-then-act on separate lock acquisitions) is still possible. A thread that panics while holding a lock "poisons" it, which is why `lock()` returns a `Result`.
+</Callout>
+
+## Message passing with channels
+
+"Do not communicate by sharing memory; share memory by communicating." Rust supports that style too. `std::sync::mpsc` is a multi-producer, single-consumer channel, and sending a value **moves** it: once sent, the producer cannot touch it any more, so there is nothing left to race on.
+
+<Playground title="Workers and a channel">
+```rust
+use std::sync::mpsc;
+use std::thread;
+
+fn main() {
+    let (tx, rx) = mpsc::channel();
+    for id in 0..3 {
+        let tx = tx.clone(); // many producers...
+        thread::spawn(move || {
+            for job in 0..3 {
+                tx.send(format!("worker {id}: job {job}")).unwrap();
+            }
+        }); // ...each sender is dropped when its thread ends
+    }
+    drop(tx); // drop the original too, or the receiver waits forever
+
+    // ...single consumer: iteration ends when all senders are gone
+    let mut messages: Vec<String> = rx.iter().collect();
+    messages.sort();
+    println!("{} messages", messages.len());
+    println!("first: {}", messages[0]);
+}
+```
+</Playground>
+
+Channel shutdown is driven by ownership: when the last `Sender` is dropped, the receiver's iterator ends. For multi-consumer channels and `select`, the ecosystem uses `crossbeam-channel` or `flume`.
+
+<Compare left="Go">
+```go
+ch := make(chan string)
+for id := 0; id < 3; id++ {
+    go func(id int) {
+        ch <- fmt.Sprintf("worker %d", id)
+    }(id)
+}
+for i := 0; i < 3; i++ {
+    fmt.Println(<-ch)
+}
+```
+
+```rust
+let (tx, rx) = mpsc::channel();
+for id in 0..3 {
+    let tx = tx.clone();
+    thread::spawn(move || {
+        tx.send(format!("worker {id}")).unwrap();
+    });
+}
+drop(tx);
+for msg in rx { println!("{msg}"); }
+```
+</Compare>
+
+## Data parallelism with Rayon
+
+For CPU-bound work over collections you rarely spawn threads by hand. The **Rayon** crate turns an iterator into a work-stealing parallel one by changing a single method call:
+
+```rust
+use rayon::prelude::*;
+
+let sum: u64 = (1..=10_000_000u64)
+    .into_par_iter()       // instead of into_iter()
+    .filter(|n| n % 3 == 0)
+    .map(|n| n * n)
+    .sum();
+```
+
+The same `Send`/`Sync` bounds apply: if the closure captured an `Rc` or a `RefCell`, this would not compile. That is the practical meaning of "fearless": you can parallelize a loop and let the compiler tell you whether it is safe.
+
+## Key takeaways
+
+- `std::thread` gives you real OS threads; `move` closures and `'static` bounds ensure they own what they use.
+- A data race requires two simultaneous `&mut`, which the borrow checker already forbids.
+- `Send` (can move to another thread) and `Sync` (can be shared by reference) are auto traits checked at compile time with zero runtime cost.
+- Compose `Arc` for shared ownership with `Mutex`, `RwLock` or atomics for synchronized mutation. The mutex owns its data.
+- Scoped threads can borrow from the stack; channels transfer ownership between threads.
+- Deadlocks and logical race conditions are still your responsibility.

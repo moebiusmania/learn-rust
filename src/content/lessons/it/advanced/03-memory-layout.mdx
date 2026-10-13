@@ -1,0 +1,174 @@
+---
+title: Layout della memoria
+description: Dimensione, allineamento e padding, riordino dei campi e repr(C), discriminanti e nicchie degli enum, fat pointer e tipi a dimensione zero.
+duration: 25
+tags: [size_of, allineamento, repr(C), nicchie, fat pointer]
+---
+
+In un linguaggio con garbage collector ogni oggetto si nasconde dietro un header e un puntatore, e decide il runtime come memorizzarlo. In Rust un valore *è* i suoi byte: una `struct` con due `u32` occupa otto byte, inline, ovunque tu la metta (sullo stack, dentro un `Vec`, dentro un'altra struct). Sapere come il compilatore dispone quei byte ti aiuta a ragionare su prestazioni, FFI e alcune delle ottimizzazioni più ingegnose del linguaggio.
+
+## Dimensione e allineamento
+
+Ogni tipo ha due numeri, entrambi disponibili in compilazione:
+
+- **`size_of::<T>()`**: quanti byte occupa un valore, padding compreso. È sempre un multiplo dell'allineamento, così gli array di `T` restano allineati.
+- **`align_of::<T>()`**: l'indirizzo di un valore deve essere un multiplo di questo numero. Un `u32` vuole indirizzi divisibili per 4, un `u64` per 8 (sui target a 64 bit).
+
+<Playground title="Dimensioni e allineamenti">
+```rust
+use std::mem::{align_of, size_of};
+
+#[allow(dead_code)]
+struct Mixed { a: u8, b: u32, c: u16 }
+
+#[allow(dead_code)]
+#[repr(C)]
+struct MixedC { a: u8, b: u32, c: u16 }
+
+struct Marker; // tipo a dimensione zero
+
+macro_rules! show {
+    ($($t:ty),* $(,)?) => {
+        $( println!("{:<20} size {:>2}  align {}", stringify!($t), size_of::<$t>(), align_of::<$t>()); )*
+    };
+}
+
+fn main() {
+    show!(u8, u16, u32, u64, u128, char, bool, f64);
+    show!(Mixed, MixedC, Marker, (u8, u64), [u16; 3]);
+}
+```
+</Playground>
+
+`Mixed` e `MixedC` hanno gli stessi tre campi, eppure uno occupa 8 byte e l'altro 12. Quella differenza è **padding**, e chi decide come gestirlo è l'argomento della prossima sezione. Nota anche che `char` occupa 4 byte: contiene qualsiasi valore scalare Unicode, a differenza del `char` del C o del `char` UTF-16 di Java.
+
+## Ordine dei campi: repr(Rust) e repr(C)
+
+Con la rappresentazione di default, `repr(Rust)`, il compilatore è **libero di riordinare i campi**. Oggi `rustc` li ordina essenzialmente per allineamento decrescente, cosa che minimizza il padding: `Mixed` diventa `b: u32, c: u16, a: u8` più un byte di padding finale. Con `#[repr(C)]` i campi restano nell'ordine di dichiarazione e ognuno viene allineato dov'è, esattamente come farebbe un compilatore C: `a`, tre byte di padding, `b`, `c`, due byte di padding finale.
+
+Costruisci una struct nel calcolatore qui sotto e passa da una rappresentazione all'altra:
+
+<LayoutCalculator />
+
+<Callout type="warn" title="Non fare affidamento sul layout di default">
+Il layout `repr(Rust)` **non è specificato**. Può cambiare tra versioni del compilatore, e due istanze generiche della stessa struct possono avere layout diversi. Il codice che reinterpreta byte con transmute, condivide memoria con il C o invia struct sulla rete ha bisogno di `#[repr(C)]` (oppure `#[repr(transparent)]` per i wrapper con un solo campo). Per tutto il resto, lascia scegliere al compilatore.
+</Callout>
+
+<Compare left="C">
+```c
+struct Mixed {
+    uint8_t  a;   // offset 0, poi 3 byte di padding
+    uint32_t b;   // offset 4
+    uint16_t c;   // offset 8, poi 2 byte di padding
+};                // sizeof == 12, sempre
+```
+
+```rust
+struct Mixed {
+    a: u8,   // il compilatore può spostarmi
+    b: u32,
+    c: u16,
+}            // size_of == 8 con il rustc di oggi
+#[repr(C)]
+struct MixedC { a: u8, b: u32, c: u16 } // 12, come in C
+```
+</Compare>
+
+## Enum: discriminanti e nicchie
+
+Un `enum` di Rust è una tagged union: un **discriminante** dice quale variante è attiva, seguito dallo spazio sufficiente per la variante più grande. Ecco perché `Shape` qui sotto occupa 12 byte: un tag più due `f32`. Ma il compilatore è più furbo di una tagged union ingenua. Se un tipo ha configurazioni di bit **non valide**, il compilatore può usarle per codificare gratis il discriminante. Queste configurazioni libere si chiamano **nicchie** (niche).
+
+- Un riferimento `&T` non può mai essere nullo, quindi `Option<&T>` usa il puntatore nullo per indicare `None`: stessa dimensione di un puntatore, esattamente come un puntatore nullable in C.
+- `Box<T>`, `NonNull<T>`, `Vec<T>` e `String` contengono un puntatore non nullo, quindi avvolgerli in `Option` non costa nulla.
+- `NonZeroU32` vieta lo zero, quindi `Option<NonZeroU32>` occupa 4 byte mentre `Option<u32>` ne richiede 8.
+- `bool` usa solo 0 e 1, lasciando 254 nicchie: anche `Option<Option<bool>>` sta in un byte.
+
+<Playground title="Dimensioni degli enum e ottimizzazione delle nicchie">
+```rust
+use std::mem::size_of;
+use std::num::NonZeroU32;
+
+#[allow(dead_code)]
+enum Shape { Circle(f32), Rect(f32, f32), Empty }
+
+#[allow(dead_code)]
+#[repr(u8)]
+enum Status { Ok = 0, NotFound = 4, Teapot = 18 }
+
+macro_rules! show {
+    ($($t:ty),* $(,)?) => { $( println!("{:<24} {:>2} byte", stringify!($t), size_of::<$t>()); )* };
+}
+
+fn main() {
+    show!(Shape, Status, Option<u32>, Option<NonZeroU32>);
+    // ottimizzazione delle nicchie: la configurazione "impossibile" codifica None
+    show!(&u64, Option<&u64>, Box<u64>, Option<Box<u64>>, bool, Option<bool>, Option<Option<bool>>);
+    show!(Result<u32, ()>, Option<String>, Option<Vec<u8>>);
+    println!("Status::Teapot as u8 = {}", Status::Teapot as u8);
+}
+```
+</Playground>
+
+<Callout type="compare" from="Java / C#">
+In Java un `Optional<Integer>` è un oggetto sullo heap che punta a un altro oggetto sullo heap. In Rust `Option<NonZeroU32>` è fatto di quattro byte sullo stack, e `Option<&T>` viene compilato esattamente nello stesso codice macchina di un controllo su un puntatore nullable. "Niente null" non costa nulla perché il compilatore riusa la rappresentazione che avrebbe avuto il null.
+</Callout>
+
+## Fat pointer
+
+La maggior parte dei riferimenti è una singola parola macchina. Due categorie portano con sé una parola aggiuntiva di metadati e si chiamano **fat pointer**:
+
+| Tipo | Parole | Contenuto |
+| --- | --- | --- |
+| `&T`, `Box<T>` (con `T` sized) | 1 | indirizzo |
+| `&[T]`, `&str`, `Box<[T]>` | 2 | indirizzo + lunghezza |
+| `&dyn Trait`, `Box<dyn Trait>` | 2 | indirizzo dei dati + indirizzo della vtable |
+| `Vec<T>`, `String` | 3 | puntatore allo heap + lunghezza + capacità |
+
+<Playground title="Dentro Vec, slice, &str e &dyn">
+```rust
+use std::fmt::Debug;
+use std::mem::size_of_val;
+
+fn main() {
+    let v: Vec<u32> = vec![10, 20, 30, 40];
+    println!("{:<10} {:>2} byte  ptr={:p} len={} cap={}", "Vec<u32>", size_of_val(&v), v.as_ptr(), v.len(), v.capacity());
+
+    // Un riferimento a slice è un fat pointer: (ptr, len)
+    let s: &[u32] = &v[1..3];
+    println!("{:<10} {:>2} byte  ptr={:p} len={}", "&[u32]", size_of_val(&s), s.as_ptr(), s.len());
+
+    // &str è una slice di byte UTF-8: len conta i byte, non i caratteri
+    let text = "perché";
+    println!("{:<10} {:>2} byte  len={} chars={}", "&str", size_of_val(&text), text.len(), text.chars().count());
+
+    // &dyn Trait è (puntatore ai dati, puntatore alla vtable)
+    let d: &dyn Debug = &v;
+    println!("{:<10} {:>2} byte  ptr dati + ptr vtable", "&dyn Debug", size_of_val(&d));
+}
+```
+</Playground>
+
+Il puntatore della slice è quello del `Vec` più 4 byte: fare una slice non copia nulla, costruisce solo una nuova coppia `(ptr, len)` che punta nello stesso buffer. Una `String` è letteralmente un `Vec<u8>` che garantisce l'UTF-8, e `&str` è un `&[u8]` con la stessa garanzia: ecco perché `len()` conta i byte.
+
+<Callout type="runtime">
+In Rust non esiste un header degli oggetti. Un oggetto Java porta una mark word e un puntatore alla classe (12–16 byte) prima del primo campo; un `int` di Python occupa 28 byte. Un `u32` di Rust occupa 4 byte e un `Vec<u32>` con un milione di elementi occupa 24 byte sullo stack più esattamente 4 MB sullo heap. Le informazioni per il dispatch dinamico vivono nel *puntatore* (`&dyn Trait`), non nel valore, quindi le paghi solo dove le usi.
+</Callout>
+
+## Tipi a dimensione zero
+
+Una struct senza campi, `()`, `PhantomData<T>` o un array vuoto hanno dimensione zero. Esistono solo nel sistema dei tipi:
+
+- `HashSet<T>` è implementato come `HashMap<T, ()>`: i valori non occupano alcuno spazio.
+- Un `Vec<()>` non alloca mai; fare push incrementa solo la lunghezza.
+- Tipi marcatore come `struct Meters;` o parametri di typestate (`Connection<Open>`) non costano nulla a runtime.
+
+I tipi a dimensione zero sono uno dei motivi per cui "astrazione a costo zero" va preso alla lettera: i tipi possono codificare regole che il compilatore verifica, e poi sparire completamente dal binario.
+
+## Punti chiave
+
+- Un valore Rust è i suoi byte, memorizzati inline senza header; `size_of` e `align_of` sono costanti di compilazione.
+- Il padding mantiene allineati i campi. Con il `repr(Rust)` di default il compilatore riordina i campi per ridurlo, ma il layout esatto non è specificato.
+- Usa `#[repr(C)]` per l'FFI e per qualsiasi codice che dipenda dalla disposizione dei byte.
+- Gli enum sono tagged union, e le nicchie permettono a `Option<&T>`, `Option<Box<T>>` e `Option<NonZeroU32>` di non costare nulla in più.
+- Slice e `&str` sono (puntatore, lunghezza); `&dyn Trait` è (puntatore, vtable); `Vec` e `String` sono (puntatore, lunghezza, capacità).
+- I tipi a dimensione zero portano informazione nel sistema dei tipi e spariscono dal codice compilato.

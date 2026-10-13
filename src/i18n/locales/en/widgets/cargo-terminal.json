@@ -1,0 +1,96 @@
+{
+  "title": "Cargo at work",
+  "subtitle": "Pick a command to see what it prints for a small library crate",
+  "simulation": "simulated output",
+  "replay": "Replay",
+  "commands": {
+    "test": {
+      "cmd": "cargo test",
+      "output": [
+        "dim|   Compiling timeparse v0.1.0 (/home/dev/timeparse)",
+        "dim|    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s",
+        "hl|     Running unittests src/lib.rs (target/debug/deps/timeparse-3f2a9c1e)",
+        "",
+        "running 4 tests",
+        "test tests::parses_midnight ... ok|ok",
+        "test tests::parses_half_past_one ... ok|ok",
+        "test tests::rejects_out_of_range ... ok|ok",
+        "test tests::panics_on_empty_input - should panic ... ok|ok",
+        "",
+        "ok|test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+        "hl|     Running tests/cli.rs (target/debug/deps/cli-91b0d2a4)",
+        "",
+        "running 1 test",
+        "test end_to_end_roundtrip ... ok|ok",
+        "",
+        "ok|test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "",
+        "hl|   Doc-tests timeparse",
+        "",
+        "running 1 test",
+        "test src/lib.rs - parse_time (line 7) ... ok|ok",
+        "",
+        "ok|test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s"
+      ],
+      "explain": "Three separate test binaries run in sequence: unit tests compiled from <code>src/</code> with <code>cfg(test)</code>, each file in <code>tests/</code> as its own crate, and finally every code block in your doc comments. Tests inside one binary run in parallel threads."
+    },
+    "clippy": {
+      "cmd": "cargo clippy",
+      "output": [
+        "dim|    Checking timeparse v0.1.0 (/home/dev/timeparse)",
+        "warn|warning: length comparison to zero",
+        "dim| --> src/lib.rs:9:8",
+        "dim|  |",
+        "  9 |     if s.len() == 0 {",
+        "dim|  |        ^^^^^^^^^^^^ help: using `is_empty` is clearer and more explicit: `s.is_empty()`",
+        "dim|  |",
+        "dim|  = note: `#[warn(clippy::len_zero)]` on by default",
+        "",
+        "warn|warning: unneeded `return` statement",
+        "dim| --> src/lib.rs:16:5",
+        "dim|  |",
+        " 16 |     return Ok(h * 60 + m);",
+        "dim|  |     ^^^^^^^^^^^^^^^^^^^^^",
+        "dim|  = note: `#[warn(clippy::needless_return)]` on by default",
+        "",
+        "warn|warning: `timeparse` (lib) generated 2 warnings (run `cargo clippy --fix --lib -p timeparse` to apply 2 suggestions)",
+        "dim|    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s"
+      ],
+      "explain": "Clippy runs the compiler front end plus hundreds of extra lints grouped by category (style, correctness, complexity, perf, pedantic). Most come with a machine-applicable fix: <code>cargo clippy --fix</code>. In CI, <code>-- -D warnings</code> turns warnings into errors."
+    },
+    "fmt": {
+      "cmd": "cargo fmt --check",
+      "output": [
+        "Diff in /home/dev/timeparse/src/lib.rs:12:",
+        "err|-    let (h,m) = s.split_once(':').ok_or(\"missing ':'\")?;",
+        "ok|+    let (h, m) = s.split_once(':').ok_or(\"missing ':'\")?;",
+        "Diff in /home/dev/timeparse/src/lib.rs:21:",
+        "err|-fn tests_helper( input:&str ) -> u32 { parse_time(input).unwrap() }",
+        "ok|+fn tests_helper(input: &str) -> u32 {",
+        "ok|+    parse_time(input).unwrap()",
+        "ok|+}",
+        "dim|# exit status 1"
+      ],
+      "explain": "<code>--check</code> does not modify files: it prints a diff and exits with status 1, which is exactly what you want in CI. Locally, plain <code>cargo fmt</code> rewrites the files. There is one canonical style, so formatting is never a code-review topic."
+    },
+    "doc": {
+      "cmd": "cargo doc --open",
+      "output": [
+        "dim|    Checking timeparse v0.1.0 (/home/dev/timeparse)",
+        "dim| Documenting timeparse v0.1.0 (/home/dev/timeparse)",
+        "dim|    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.12s",
+        "ok|     Opening /home/dev/timeparse/target/doc/timeparse/index.html"
+      ],
+      "explain": "rustdoc renders your <code>///</code> comments (Markdown) into a static HTML site, with cross links to your dependencies' docs. The same tool powers docs.rs, where every crate published on crates.io gets its documentation built automatically."
+    },
+    "release": {
+      "cmd": "cargo build --release",
+      "output": [
+        "dim|   Compiling timeparse v0.1.0 (/home/dev/timeparse)",
+        "ok|    Finished `release` profile [optimized] target(s) in 3.87s"
+      ],
+      "explain": "The release profile enables <code>opt-level = 3</code>, removes debug assertions and integer overflow checks, and writes to <code>target/release/</code>. It is slower to compile, often much faster to run: never benchmark a debug build."
+    }
+  }
+}

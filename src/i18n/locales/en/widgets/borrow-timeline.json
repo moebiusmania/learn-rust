@@ -1,0 +1,23 @@
+{
+  "title": "Borrow timeline",
+  "subtitle": "Each bar is a borrow, alive from creation to its last use. Hover a bar to see its lines.",
+  "line": "line",
+  "shared": "shared &T",
+  "mut": "exclusive &mut T",
+  "conflict": "conflict",
+  "lexical": "lexical scope (pre-NLL)",
+  "ok": "Compiles",
+  "fail": "Does not compile",
+  "scenarios": [
+    { "label": "Many readers", "text": "Two shared borrows overlap freely. Both end at their last use on line 4, so <code>v.push</code> on line 5 can take an exclusive borrow. Under the old lexical rules they would have lived until the end of the block (dashed) and this would not compile." },
+    { "label": "Read, then write", "text": "<code>first</code> points into the vector's buffer. <code>push</code> may reallocate that buffer, which would leave <code>first</code> dangling. Because <code>first</code> is used again on line 4, the shared borrow is still alive when the exclusive one starts." },
+    { "label": "Two writers", "text": "Two exclusive borrows of the same value overlap on lines 3–4. Even single-threaded, two live <code>&mut</code> would break the guarantee that whoever holds <code>&mut</code> sees no surprise changes." },
+    { "label": "NLL in action", "text": "<code>r1</code> is last used on line 3, so its borrow ends there, not at the closing brace. The shared borrow <code>r2</code> starts afterwards: no overlap, no error. This is what non-lexical lifetimes (Rust 2018+) bought us." }
+  ],
+  "errors": [
+    "",
+    "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable",
+    "error[E0499]: cannot borrow `s` as mutable more than once at a time",
+    ""
+  ]
+}

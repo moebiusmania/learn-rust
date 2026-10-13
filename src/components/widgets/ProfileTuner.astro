@@ -1,0 +1,213 @@
+---
+/**
+ * Release-profile playground: knobs → illustrative relative compile time,
+ * binary size and run time, plus the matching [profile.release] block.
+ * The numbers are hand-tuned trends (see `FACTORS`), not benchmarks.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Knob { label: string; help: string }
+interface Strings {
+  title: string; subtitle: string; disclaimer: string; presetsLabel: string;
+  presets: Record<'default' | 'speed' | 'size', string>;
+  metrics: Record<'compile' | 'size' | 'runtime', string>;
+  baseline: string; toml: string;
+  knobs: Record<'opt' | 'lto' | 'cgu' | 'panic' | 'strip', Knob>;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'profile-tuner');
+
+const knobs = [
+  { key: 'opt', options: ['0', '1', '2', '3', 's', 'z'] },
+  { key: 'lto', options: ['off', 'thin', 'fat'] },
+  { key: 'cgu', options: ['16', '1'] },
+  { key: 'panic', options: ['unwind', 'abort'] },
+  { key: 'strip', options: ['none', 'symbols'] },
+] as const;
+const defaults = { opt: '3', lto: 'off', cgu: '16', panic: 'unwind', strip: 'none' };
+const metrics = ['compile', 'size', 'runtime'] as const;
+const MAX = 3; // bar scale: full width = 3.0×
+---
+<WidgetFrame
+  tag="profile-tuner"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="gauge"
+  data-help={JSON.stringify(Object.fromEntries(Object.entries(s.knobs).map(([k, v]) => [k, v.help])))}
+>
+  <div class="pt-presets">
+    <span class="pt-label">{s.presetsLabel}</span>
+    <div class="widget-controls">
+      <button type="button" class="btn btn-sm btn-ghost" data-preset="default">{s.presets.default}</button>
+      <button type="button" class="btn btn-sm btn-ghost" data-preset="speed">{s.presets.speed}</button>
+      <button type="button" class="btn btn-sm btn-ghost" data-preset="size">{s.presets.size}</button>
+    </div>
+  </div>
+
+  <div class="pt-knobs">
+    {
+      knobs.map((k) => (
+        <div class="pt-knob">
+          <span class="pt-label" id={`pt-${k.key}`}><code>{s.knobs[k.key].label}</code></span>
+          <div class="seg" role="group" aria-labelledby={`pt-${k.key}`}>
+            {k.options.map((o) => (
+              <button type="button" data-knob={k.key} data-value={o} aria-pressed={defaults[k.key] === o ? "true" : "false"}>{o}</button>
+            ))}
+          </div>
+        </div>
+      ))
+    }
+  </div>
+
+  <div class="widget-caption pt-help" aria-live="polite"><p set:html={s.knobs.opt.help} /></div>
+
+  <div class="pt-results">
+    <div class="pt-bars">
+      {
+        metrics.map((m) => (
+          <div class="pt-metric" data-metric={m}>
+            <div class="pt-metric-head">
+              <span>{s.metrics[m]}</span>
+              <output class="pt-value">1.0×</output>
+            </div>
+            <svg viewBox="0 0 300 18" preserveAspectRatio="none" aria-hidden="true">
+              <rect class="pt-track" x="0" y="3" width="300" height="12" rx="6" />
+              <rect class="pt-bar" x="0" y="3" width="300" height="12" rx="6" style={`transform: scaleX(${1 / MAX})`} />
+              <line class="pt-base" x1={300 / MAX} y1="0" x2={300 / MAX} y2="18" />
+            </svg>
+          </div>
+        ))
+      }
+      <p class="pt-disclaimer">{s.disclaimer}</p>
+    </div>
+    <div class="pt-toml">
+      <span class="pt-label">{s.toml}</span>
+      <pre class="code-lines"><code class="pt-toml-code"></code></pre>
+    </div>
+  </div>
+</WidgetFrame>
+
+<script>
+  type Settings = Record<'opt' | 'lto' | 'cgu' | 'panic' | 'strip', string>;
+  type Triple = [compile: number, size: number, runtime: number];
+
+  const MAX = 3;
+  const DEFAULTS: Settings = { opt: '3', lto: 'off', cgu: '16', panic: 'unwind', strip: 'none' };
+  const PRESETS: Record<string, Settings> = {
+    default: DEFAULTS,
+    speed: { opt: '3', lto: 'fat', cgu: '1', panic: 'abort', strip: 'none' },
+    size: { opt: 'z', lto: 'fat', cgu: '1', panic: 'abort', strip: 'symbols' },
+  };
+  /** Multiplicative factors vs. the default release profile (= 1). Representative trends only. */
+  const FACTORS: Record<keyof Settings, Record<string, Triple>> = {
+    opt: {
+      '0': [0.35, 1.6, 8], '1': [0.6, 1.15, 1.8], '2': [0.9, 1.02, 1.02],
+      '3': [1, 1, 1], s: [0.92, 0.78, 1.25], z: [0.9, 0.72, 1.4],
+    },
+    lto: { off: [1, 1, 1], thin: [1.25, 0.92, 0.97], fat: [1.8, 0.85, 0.94] },
+    cgu: { '16': [1, 1, 1], '1': [1.35, 0.95, 0.96] },
+    panic: { unwind: [1, 1, 1], abort: [0.97, 0.9, 0.99] },
+    strip: { none: [1, 1, 1], symbols: [1, 0.7, 1] },
+  };
+
+  class ProfileTuner extends HTMLElement {
+    #state: Settings = { ...DEFAULTS };
+    #help: Record<string, string> = {};
+
+    connectedCallback() {
+      this.#help = JSON.parse(this.dataset.help ?? '{}');
+      this.querySelectorAll<HTMLButtonElement>('[data-knob]').forEach((b) =>
+        b.addEventListener('click', () => {
+          this.#state[b.dataset.knob as keyof Settings] = b.dataset.value!;
+          this.#showHelp(b.dataset.knob!);
+          this.#update();
+        }),
+      );
+      this.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) =>
+        b.addEventListener('click', () => {
+          this.#state = { ...PRESETS[b.dataset.preset!]! };
+          this.#update();
+        }),
+      );
+      this.#update();
+    }
+
+    #showHelp(knob: string) {
+      const p = this.querySelector('.pt-help p')!;
+      p.innerHTML = this.#help[knob] ?? '';
+    }
+
+    #update() {
+      const s = this.#state;
+      this.querySelectorAll<HTMLButtonElement>('[data-knob]').forEach((b) =>
+        b.setAttribute('aria-pressed', String(s[b.dataset.knob as keyof Settings] === b.dataset.value)),
+      );
+      this.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) => {
+        const p = PRESETS[b.dataset.preset!]!;
+        b.setAttribute('aria-pressed', String((Object.keys(p) as (keyof Settings)[]).every((k) => p[k] === s[k])));
+      });
+
+      const total: Triple = [1, 1, 1];
+      (Object.keys(FACTORS) as (keyof Settings)[]).forEach((k) => {
+        FACTORS[k][s[k]]!.forEach((f, i) => (total[i] *= f));
+      });
+      this.querySelectorAll<HTMLElement>('.pt-metric').forEach((row, i) => {
+        const v = total[i]!;
+        row.querySelector<SVGRectElement>('.pt-bar')!.style.transform = `scaleX(${Math.min(v, MAX) / MAX})`;
+        row.querySelector('output')!.textContent = `${v.toFixed(v >= 10 ? 0 : 2)}×`;
+        row.dataset.trend = v < 0.98 ? 'better' : v > 1.02 ? 'worse' : 'same';
+        row.classList.toggle('is-overflow', v > MAX);
+      });
+
+      const q = (v: string) => `<span class="tok-str">"${v}"</span>`;
+      const n = (v: string) => `<span class="tok-num">${v}</span>`;
+      const key = (k: string) => `<span class="tok-fn">${k}</span>`;
+      const line = (k: keyof Settings, text: string) =>
+        `<span class="ln${s[k] !== DEFAULTS[k] ? ' is-active' : ''}">${text}</span>`;
+      const lto = s.lto === 'off' ? n('false') : q(s.lto);
+      this.querySelector('.pt-toml-code')!.innerHTML = [
+        `<span class="ln"><span class="tok-kw">[profile.release]</span></span>`,
+        line('opt', `${key('opt-level')} = ${/\d/.test(s.opt) ? n(s.opt) : q(s.opt)}`),
+        line('lto', `${key('lto')} = ${lto}`),
+        line('cgu', `${key('codegen-units')} = ${n(s.cgu)}`),
+        line('panic', `${key('panic')} = ${q(s.panic)}`),
+        line('strip', `${key('strip')} = ${q(s.strip)}`),
+      ].join('');
+    }
+  }
+  customElements.define('profile-tuner', ProfileTuner);
+</script>
+
+<style>
+  profile-tuner { display: block; }
+  .pt-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); }
+  .pt-label code { font-family: var(--font-mono); font-size: 0.8rem; letter-spacing: 0; text-transform: none; color: var(--text-muted); }
+  .pt-presets { display: grid; gap: var(--space-2); }
+  .pt-presets [aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); }
+
+  .pt-knobs { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr)); }
+  .pt-knob { display: grid; gap: var(--space-1); justify-items: start; }
+  .pt-knob .seg { flex-wrap: wrap; }
+  .pt-knob .seg > button { font-family: var(--font-mono); letter-spacing: 0; text-transform: none; min-inline-size: 2rem; }
+
+  .pt-results { display: grid; gap: var(--space-4); }
+  @container widget (width >= 38rem) { .pt-results { grid-template-columns: 1.2fr 1fr; } }
+  .pt-bars { display: grid; gap: var(--space-3); align-content: start; }
+  .pt-metric { --bar: var(--accent); display: grid; gap: 2px; }
+  .pt-metric[data-trend='better'] { --bar: var(--ok); }
+  .pt-metric[data-trend='worse'] { --bar: var(--warn); }
+  .pt-metric-head { display: flex; justify-content: space-between; font-size: var(--step--1); }
+  .pt-value { font-family: var(--font-mono); font-weight: 700; color: color-mix(in oklch, var(--bar) 80%, var(--text)); transition: color var(--dur); }
+  .pt-metric svg { inline-size: 100%; block-size: 18px; overflow: visible; }
+  .pt-track { fill: var(--surface-3); }
+  .pt-bar {
+    fill: var(--bar); transform-box: fill-box; transform-origin: 0 50%;
+    transition: transform 600ms var(--ease-spring), fill var(--dur);
+  }
+  .pt-metric.is-overflow .pt-bar { fill: var(--danger); }
+  .pt-base { stroke: var(--text); stroke-width: 2; stroke-dasharray: 3 2; opacity: 0.55; }
+  .pt-disclaimer { margin: 0; font-size: 0.75rem; color: var(--text-faint); }
+  .pt-toml { display: grid; gap: var(--space-2); align-content: start; }
+  .pt-toml .code-lines { font-size: 0.8rem; }
+  .pt-help p { margin: 0; }
+</style>

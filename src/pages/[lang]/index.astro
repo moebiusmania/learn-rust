@@ -1,0 +1,170 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import HeroArt from '@/components/HeroArt.astro';
+import TrackGlyph from '@/components/TrackGlyph.astro';
+import Icon from '@/components/Icon.astro';
+import { useTranslations } from '@/i18n';
+import { locales, tracks, type Locale } from '@/i18n/config';
+import { localeUrl } from '@/lib/url';
+import { getLessons, getTrackInfo } from '@/lib/content';
+
+export function getStaticPaths() {
+  return locales.map((lang) => ({ params: { lang } }));
+}
+
+const lang = Astro.params.lang as Locale;
+const { t, tr } = useTranslations(lang);
+const why = tr<{ title: string; text: string }[]>('home.why');
+const whyIcons = ['memory', 'shield', 'zap', 'branch'] as const;
+
+const trackCards = await Promise.all(
+  tracks.map(async (id, i) => {
+    const info = await getTrackInfo(lang, id);
+    const lessons = await getLessons(lang, id);
+    return {
+      id,
+      level: (i + 1) as 1 | 2 | 3,
+      info,
+      lessons,
+      minutes: lessons.reduce((sum, l) => sum + l.entry.data.duration, 0),
+    };
+  }),
+);
+---
+<BaseLayout lang={lang}>
+  <section class="container hero">
+    <div class="hero-text">
+      <p class="eyebrow fade-up" style="--i:0">{t('home.eyebrow')}</p>
+      <h1 class="fade-up" style="--i:1">{t('home.heroTitle')}</h1>
+      <p class="lead fade-up" style="--i:2">{t('home.heroLead')}</p>
+      <div class="cta fade-up" style="--i:3">
+        <a class="btn" href={localeUrl(lang, 'basic')}>{t('home.cta')} <Icon name="arrowRight" /></a>
+        <a class="btn btn-ghost" href="#tracks">{t('home.ctaSecondary')}</a>
+      </div>
+    </div>
+    <div class="hero-visual fade-up" style="--i:2"><HeroArt /></div>
+  </section>
+
+  <section class="container section">
+    <h2 class="section-title reveal">{t('home.whyTitle')}</h2>
+    <div class="why-grid">
+      {
+        why.map((w, i) => (
+          <article class="card why reveal">
+            <span class="why-icon"><Icon name={whyIcons[i % whyIcons.length]!} /></span>
+            <h3>{w.title}</h3>
+            <p class="muted">{w.text}</p>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="container section" id="tracks">
+    <h2 class="section-title reveal">{t('home.tracksTitle')}</h2>
+    <p class="section-lead muted reveal">{t('home.tracksLead')}</p>
+    <div class="tracks-grid">
+      {
+        trackCards.map((c) => (
+          <a class="track-card reveal" href={localeUrl(lang, c.id)}>
+            <div class="track-top">
+              <TrackGlyph level={c.level} />
+              <div class="track-meta">
+                <span class="chip">{t('home.lessonsCount', { count: c.lessons.length })}</span>
+                <span class="chip"><Icon name="clock" size={12} />{t('home.minutes', { count: c.minutes })}</span>
+              </div>
+            </div>
+            <h3>{c.info.title}</h3>
+            <p class="track-tagline">{c.info.tagline}</p>
+            <p class="muted">{c.info.summary}</p>
+            <ol class="track-preview">
+              {c.lessons.slice(0, 4).map((l) => <li>{l.entry.data.title}</li>)}
+              {c.lessons.length > 4 && <li class="more">+{c.lessons.length - 4}</li>}
+            </ol>
+            <span class="track-open">{t('home.startTrack')} <Icon name="arrowRight" size={16} /></span>
+          </a>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="container section">
+    <div class="how card reveal">
+      <span class="why-icon"><Icon name="terminal" /></span>
+      <div>
+        <h2>{t('home.howTitle')}</h2>
+        <p class="muted">{t('home.howText')}</p>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .hero {
+    display: grid; align-items: center; gap: var(--space-7);
+    padding-block: var(--space-6) var(--space-7);
+    @media (width >= 60rem) { grid-template-columns: 1.1fr 1fr; }
+  }
+  .hero h1 { font-size: var(--step-4); margin-block: var(--space-3) var(--space-4); letter-spacing: -0.035em; }
+  .lead { font-size: var(--step-1); color: var(--text-muted); max-inline-size: 38rem; line-height: 1.55; }
+  .cta { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-block-start: var(--space-6); }
+  .hero-visual { max-inline-size: 34rem; justify-self: center; inline-size: 100%; }
+
+  .section { padding-block: var(--space-7); }
+  .section-title { font-size: var(--step-3); margin-block-end: var(--space-3); }
+  .section-lead { max-inline-size: 44rem; margin-block-end: var(--space-6); }
+
+  .why-grid {
+    display: grid; gap: var(--space-4); margin-block-start: var(--space-5);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  }
+  .why h3 { font-size: var(--step-0); margin-block: var(--space-3) var(--space-2); }
+  .why p { font-size: var(--step--1); }
+  .why-icon {
+    display: inline-grid; place-items: center; inline-size: 2.6rem; block-size: 2.6rem; flex: none;
+    border-radius: 12px; background: var(--accent-soft); color: var(--accent-strong);
+  }
+
+  .tracks-grid {
+    display: grid; gap: var(--space-5);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  }
+  .track-card {
+    --border-angle: 0deg;
+    position: relative; display: flex; flex-direction: column; gap: var(--space-2);
+    padding: var(--space-5); border-radius: var(--radius-l); text-decoration: none; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-s);
+    transition: translate 400ms var(--ease-out), box-shadow 400ms, border-color 400ms;
+    isolation: isolate;
+    &::before {
+      /* animated conic border, driven by a registered custom property */
+      content: ''; position: absolute; inset: -1px; z-index: -1; border-radius: inherit; padding: 1px;
+      background: conic-gradient(from var(--angle), transparent 60%, var(--accent), var(--violet), transparent 95%);
+      mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+      opacity: 0; transition: opacity 400ms;
+    }
+    &:hover { translate: 0 -4px; box-shadow: var(--shadow-l); border-color: transparent;
+      &::before { opacity: 1; animation: rotate-angle 3s linear infinite; }
+      & .track-open { gap: var(--space-3); color: var(--accent-strong); }
+    }
+    & h3 { font-size: var(--step-2); margin-block-start: var(--space-3); }
+    & p { font-size: var(--step--1); }
+  }
+  @keyframes rotate-angle { to { --angle: 360deg; } }
+  .track-top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
+  .track-meta { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); }
+  .track-tagline { font-weight: 600; color: var(--accent-strong); }
+  .track-preview {
+    list-style: none; padding: 0; margin-block: var(--space-3); display: grid; gap: var(--space-1);
+    font-size: 0.82rem; color: var(--text-muted);
+    & li { padding-inline-start: 1rem; position: relative;
+      &::before { content: ''; position: absolute; inset-inline-start: 0; inset-block-start: 0.6em; inline-size: 5px; block-size: 5px; border-radius: 50%; background: var(--border-strong); } }
+    & .more { color: var(--text-faint); }
+  }
+  .track-open {
+    margin-block-start: auto; display: inline-flex; align-items: center; gap: var(--space-2);
+    font-weight: 600; font-size: var(--step--1); transition: gap var(--dur) var(--ease-out), color var(--dur);
+  }
+  .how { display: flex; gap: var(--space-4); align-items: flex-start;
+    & h2 { font-size: var(--step-1); margin-block-end: var(--space-2); } }
+</style>

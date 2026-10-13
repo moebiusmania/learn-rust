@@ -1,0 +1,31 @@
+---
+import { localeUrl } from '@/lib/url';
+import { locales, defaultLocale } from '@/i18n/config';
+const targets = Object.fromEntries(locales.map((l) => [l, localeUrl(l)]));
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rust, for developers</title>
+    <meta http-equiv="refresh" content={`2; url=${targets[defaultLocale]}`} />
+    <script is:inline define:vars={{ targets, fallback: defaultLocale }}>
+      let lang = null;
+      try { lang = localStorage.getItem('lang'); } catch {}
+      if (!targets[lang]) {
+        lang = (navigator.languages || [navigator.language])
+          .map((l) => l.slice(0, 2).toLowerCase())
+          .find((l) => targets[l]) || fallback;
+      }
+      location.replace(targets[lang]);
+    </script>
+    <style>
+      body { font: 16px/1.5 system-ui, sans-serif; display: grid; place-items: center; min-height: 100dvh; margin: 0; color-scheme: light dark; }
+      a { margin: 0 .5rem; }
+    </style>
+  </head>
+  <body>
+    <p>{locales.map((l) => <a href={targets[l]}>{l.toUpperCase()}</a>)}</p>
+  </body>
+</html>

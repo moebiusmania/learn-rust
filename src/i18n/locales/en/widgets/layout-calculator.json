@@ -1,0 +1,17 @@
+{
+  "title": "Struct layout calculator",
+  "subtitle": "Add fields, switch representation, watch the padding",
+  "add": "Add a field",
+  "fields": "Fields (declaration order)",
+  "remove": "Remove field",
+  "clear": "Clear",
+  "empty": "No fields: a struct with no fields is a zero-sized type (size 0, align 1).",
+  "size": "size_of",
+  "align": "align_of",
+  "padding": "padding",
+  "bytes": "bytes",
+  "memory": "Memory, 8 bytes per row",
+  "pad": "pad",
+  "reprRust": "Default: the compiler may reorder fields. Today rustc sorts them by decreasing alignment, which minimizes padding, but this order is <strong>not guaranteed</strong> and can change between compiler versions.",
+  "reprC": "<code>#[repr(C)]</code>: fields stay in declaration order and each is aligned like C would do. Predictable, required for FFI, but often larger."
+}

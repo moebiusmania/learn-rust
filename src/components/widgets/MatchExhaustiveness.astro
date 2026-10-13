@@ -1,0 +1,229 @@
+---
+/**
+ * Toggle the arms of a `match` over a 4-variant enum and see whether the
+ * compiler accepts it (E0004 for missing variants, unreachable-pattern
+ * warnings when `_` comes first). The diagnostics mimic real rustc output.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string; armsLabel: string; wildcardLabel: string; first: string; last: string;
+  statusOk: string; statusWarn: string; statusError: string;
+  okText: string; warnText: string; errorText: string; guardText: string; wildcardText: string;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'match-exhaustiveness');
+
+// `covers` is the variant an arm makes exhaustive; guarded arms cover nothing.
+const arms = [
+  { id: 'quit', label: 'Quit', code: 'Message::Quit => println!("quit"),', covers: 'quit', on: true },
+  { id: 'diag', label: 'Move if x == y', code: 'Message::Move { x, y } if x == y => println!("diagonal"),', covers: '', on: true },
+  { id: 'move', label: 'Move { x, y }', code: 'Message::Move { x, y } => println!("to {x},{y}"),', covers: 'move', on: false },
+  { id: 'write', label: 'Write(text)', code: 'Message::Write(text) => println!("{text}"),', covers: 'write', on: true },
+  { id: 'color', label: 'ChangeColor(r, g, b)', code: 'Message::ChangeColor(r, g, b) => println!("#{r:02x}{g:02x}{b:02x}"),', covers: 'color', on: false },
+  { id: 'wild', label: '_', code: '_ => println!("something else"),', covers: '*', on: false },
+];
+const data = { arms, strings: s };
+---
+<WidgetFrame tag="match-exhaustiveness" title={s.title} subtitle={s.subtitle} icon="branch" data-config={JSON.stringify(data)}>
+  <div class="me-layout">
+    <div class="me-controls">
+      <div class="me-group" role="group" aria-label={s.armsLabel}>
+        <span class="me-label">{s.armsLabel}</span>
+        {arms.map((a) => (
+          <button type="button" class="me-arm" data-arm={a.id} aria-pressed={a.on ? 'true' : 'false'}>
+            <span class="me-check" aria-hidden="true"></span><code>{a.label}</code>
+          </button>
+        ))}
+      </div>
+      <div class="me-group">
+        <span class="me-label" id="me-wild-label">{s.wildcardLabel}</span>
+        <div class="seg" role="group" aria-labelledby="me-wild-label">
+          <button type="button" data-wild="first" aria-pressed="false">{s.first}</button>
+          <button type="button" data-wild="last" aria-pressed="true">{s.last}</button>
+        </div>
+      </div>
+    </div>
+    <div class="me-code">
+      <pre class="code-lines" data-code></pre>
+    </div>
+  </div>
+  <div class="me-result" data-status="error" aria-live="polite">
+    <div class="me-status"><span class="me-dot" aria-hidden="true"></span><strong data-status-text></strong></div>
+    <pre class="me-diag" data-diag></pre>
+    <p class="me-explain" data-explain></p>
+  </div>
+</WidgetFrame>
+
+<script>
+  import { highlightRust } from '@/scripts/rust-highlight';
+
+  interface Arm { id: string; label: string; code: string; covers: string; on: boolean }
+  const VARIANTS: [string, string][] = [
+    ['quit', 'Message::Quit'],
+    ['move', 'Message::Move { .. }'],
+    ['write', 'Message::Write(_)'],
+    ['color', 'Message::ChangeColor(_, _, _)'],
+  ];
+
+  function listPatterns(p: string[]) {
+    const q = p.map((x) => `\`${x}\``);
+    if (q.length === 1) return q[0]!;
+    if (q.length <= 3) return `${q.slice(0, -1).join(', ')} and ${q.at(-1)}`;
+    return `${q.slice(0, 3).join(', ')} and ${q.length - 3} more`;
+  }
+
+  class MatchExhaustivenessWidget extends HTMLElement {
+    #arms: Arm[] = [];
+    #strings: Record<string, string> = {};
+    #wild: 'first' | 'last' = 'last';
+
+    connectedCallback() {
+      const cfg = JSON.parse(this.dataset.config!);
+      this.#arms = cfg.arms;
+      this.#strings = cfg.strings;
+      this.querySelectorAll<HTMLButtonElement>('[data-arm]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const arm = this.#arms.find((a) => a.id === b.dataset.arm)!;
+          arm.on = !arm.on;
+          b.setAttribute('aria-pressed', String(arm.on));
+          this.#render();
+        }),
+      );
+      this.querySelectorAll<HTMLButtonElement>('[data-wild]').forEach((b) =>
+        b.addEventListener('click', () => {
+          this.#wild = b.dataset.wild as 'first' | 'last';
+          this.querySelectorAll('[data-wild]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          this.#render();
+        }),
+      );
+      this.#render();
+    }
+
+    #render() {
+      const wild = this.#arms.find((a) => a.id === 'wild')!;
+      let active = this.#arms.filter((a) => a.on && a.id !== 'wild');
+      if (wild.on) active = this.#wild === 'first' ? [wild, ...active] : [...active, wild];
+
+      const lines = ['fn handle(msg: Message) {', '    match msg {', ...active.map((a) => `        ${a.code}`), '    }', '}'];
+      const covered = new Set<string>();
+      const unreachable = new Set<number>();
+      let seenWild = false;
+      active.forEach((a, i) => {
+        if (seenWild) unreachable.add(i);
+        if (a.covers === '*') { seenWild = true; VARIANTS.forEach(([v]) => covered.add(v)); }
+        else if (a.covers) covered.add(a.covers);
+      });
+      const missing = VARIANTS.filter(([v]) => !covered.has(v)).map(([, p]) => p);
+
+      const code = this.querySelector<HTMLElement>('[data-code]')!;
+      code.innerHTML = lines
+        .map((l, i) => {
+          const armIndex = i - 2;
+          const cls = ['ln'];
+          if (i === 1 && missing.length) cls.push('is-error');
+          if (unreachable.has(armIndex)) cls.push('is-dim');
+          return `<span class="${cls.join(' ')}">${highlightRust(l) || ' '}</span>`;
+        })
+        .join('');
+
+      // real-looking rustc diagnostics
+      const diag: string[] = [];
+      if (missing.length) {
+        const list = listPatterns(missing);
+        diag.push(
+          `<span class="d-err">error[E0004]</span>: non-exhaustive patterns: ${list} not covered`,
+          ` <span class="d-arrow">--></span> src/main.rs:9:11`,
+          `  |`,
+          `9 |     match msg {`,
+          `  |           <span class="d-err">^^^ pattern${missing.length > 1 ? 's' : ''} ${list} not covered</span>`,
+        );
+      }
+      if (unreachable.size) {
+        if (diag.length) diag.push('');
+        const first = Math.min(...unreachable);
+        diag.push(
+          `<span class="d-warn">warning</span>: unreachable pattern`,
+          `   |`,
+          `   |         <span class="d-warn">- matches any value</span>`,
+          `   |         ${active[first]!.code.split(' =>')[0]}`,
+          `   |         <span class="d-warn">^^^ no value can reach this</span>`,
+        );
+      }
+      this.querySelector<HTMLElement>('[data-diag]')!.innerHTML = diag.join('\n');
+      this.querySelector<HTMLElement>('[data-diag]')!.hidden = diag.length === 0;
+
+      const status = missing.length ? 'error' : unreachable.size ? 'warn' : 'ok';
+      const s = this.#strings;
+      this.querySelector<HTMLElement>('.me-result')!.dataset.status = status;
+      this.querySelector('[data-status-text]')!.textContent =
+        status === 'error' ? s.statusError! : status === 'warn' ? s.statusWarn! : s.statusOk!;
+      const notes = [status === 'error' ? s.errorText : status === 'warn' ? s.warnText : s.okText];
+      const diagOn = this.#arms.find((a) => a.id === 'diag')!.on;
+      const moveOn = this.#arms.find((a) => a.id === 'move')!.on;
+      if (diagOn && !moveOn && missing.includes('Message::Move { .. }')) notes.push(s.guardText);
+      if (wild.on && status !== 'warn') notes.push(s.wildcardText);
+      this.querySelector<HTMLElement>('[data-explain]')!.innerHTML = notes.join(' ');
+    }
+  }
+  customElements.define('match-exhaustiveness', MatchExhaustivenessWidget);
+</script>
+
+<style>
+  match-exhaustiveness { display: block; }
+  .me-layout {
+    display: grid; gap: var(--space-4);
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @container widget (width >= 40rem) {
+    .me-layout { grid-template-columns: 14rem minmax(0, 1fr); }
+  }
+  .me-controls { display: grid; gap: var(--space-4); align-content: start; }
+  .me-group { display: grid; gap: var(--space-2); justify-items: start; }
+  .me-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); }
+  .me-arm {
+    display: flex; align-items: center; gap: var(--space-2); inline-size: 100%;
+    padding: 0.35rem 0.6rem; border-radius: var(--radius-s);
+    border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+    text-align: start; font-size: 0.8rem;
+    transition: border-color var(--dur), background-color var(--dur), color var(--dur);
+    & code { font-size: 0.78rem; background: none; border: 0; padding: 0; }
+    &:hover { border-color: var(--border-strong); color: var(--text); }
+    &[aria-pressed='true'] { border-color: color-mix(in oklch, var(--accent) 50%, var(--border)); background: var(--accent-soft); color: var(--text); }
+  }
+  .me-check {
+    flex: none; inline-size: 1rem; block-size: 1rem; border-radius: 4px;
+    border: 1.5px solid var(--border-strong); display: grid; place-items: center;
+    transition: background-color var(--dur), border-color var(--dur);
+    &::after {
+      content: ''; inline-size: 0.5rem; block-size: 0.28rem; margin-block-start: -2px;
+      border: solid var(--on-accent); border-width: 0 0 2px 2px; rotate: -45deg;
+      scale: 0; transition: scale 260ms var(--ease-spring);
+    }
+  }
+  [aria-pressed='true'] > .me-check { background: var(--accent); border-color: var(--accent);
+    &::after { scale: 1; } }
+  .me-code .code-lines { font-size: 0.78rem; }
+
+  .me-result {
+    --c: var(--danger);
+    display: grid; gap: var(--space-3); padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius); background: color-mix(in oklch, var(--c) 7%, var(--surface-2));
+    border: 1px solid color-mix(in oklch, var(--c) 30%, var(--border));
+    transition: background-color 300ms, border-color 300ms;
+    &[data-status='ok'] { --c: var(--ok); }
+    &[data-status='warn'] { --c: var(--warn); }
+  }
+  .me-status { display: flex; align-items: center; gap: var(--space-2); color: color-mix(in oklch, var(--c) 75%, var(--text)); font-size: var(--step--1); }
+  .me-dot { inline-size: 0.6rem; block-size: 0.6rem; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 4px color-mix(in oklch, var(--c) 20%, transparent); }
+  .me-diag {
+    margin: 0; padding: var(--space-3); border-radius: var(--radius-s); background: var(--code-bg); border: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: 0.74rem; line-height: 1.55; overflow-x: auto; color: var(--text);
+    animation: fade-up 300ms var(--ease-out);
+    & :global(.d-err) { color: var(--danger); font-weight: 700; }
+    & :global(.d-warn) { color: var(--warn); font-weight: 700; }
+    & :global(.d-arrow) { color: var(--info); }
+  }
+  .me-explain { font-size: var(--step--1); color: var(--text-muted); margin: 0;
+    & :global(code) { font-size: 0.88em; padding: 0.1em 0.3em; border-radius: 4px; background: var(--surface-3); } }
+</style>

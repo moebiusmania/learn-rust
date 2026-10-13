@@ -1,0 +1,14 @@
+{
+  "title": "Integer explorer",
+  "subtitle": "Pick a type and two operands, then compare the four explicit overflow strategies",
+  "type": "Type",
+  "a": "a",
+  "b": "b",
+  "range": "Range",
+  "result": "wrapped bits",
+  "sign": "sign bit",
+  "none": "None",
+  "fits": "The result {sum} fits in <code>{type}</code> (range {min} … {max}). All four methods agree, and a plain <code>a + b</code> would also be fine.",
+  "overflows": "The mathematical result {sum} does <strong>not</strong> fit in <code>{type}</code> (range {min} … {max}). Each method handles it differently. A plain <code>a + b</code> would panic in a debug build and silently wrap in release.",
+  "signedNote": "Signed types use two's complement: the highest bit has negative weight (−2<sup>n−1</sup>)."
+}

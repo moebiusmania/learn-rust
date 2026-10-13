@@ -1,0 +1,14 @@
+{
+  "title": "Base",
+  "tagline": "Il modello mentale di Rust",
+  "summary": "Toolchain, tipi, ownership, borrowing, enum e gestione degli errori: le idee che servono prima di scrivere vero codice Rust.",
+  "intro": "A prima vista Rust sembra familiare: funzioni, struct, cicli, generici. La vera differenza è che il compilatore tiene traccia di chi possiede ogni valore e per quanto tempo. Questo percorso costruisce quel modello mentale passo dopo passo, confrontandolo con i linguaggi con garbage collector e con quelli a gestione manuale della memoria.",
+  "concepts": [
+    { "title": "Compilato in anticipo", "text": "rustc produce un binario nativo tramite LLVM. Niente VM e niente JIT: quello che distribuisci è codice macchina più una libreria standard linkata staticamente." },
+    { "title": "Nessun garbage collector", "text": "Ogni valore ha esattamente un proprietario. Quando il proprietario esce dallo scope il valore viene rilasciato (drop) in modo deterministico, in un punto che puoi leggere nel sorgente." },
+    { "title": "Move di default", "text": "Assegnazioni e passaggio di argomenti spostano (move) i valori che possiedono memoria sullo heap, invece di copiarli o condividerli. I tipi economici che vivono solo sullo stack scelgono Copy." },
+    { "title": "Aliasing XOR mutabilità", "text": "In ogni momento puoi avere molti riferimenti condivisi (&T) oppure un solo riferimento mutabile (&mut T), mai entrambi. Questa sola regola elimina data race e invalidazione degli iteratori." },
+    { "title": "Tutto è un'espressione", "text": "if, match e i blocchi sono espressioni che producono valori. Insieme agli enum, sostituiscono null, eccezioni e molti design pattern." },
+    { "title": "Errori nel sistema dei tipi", "text": "Le funzioni che possono fallire restituiscono Result<T, E>. L'operatore ? propaga gli errori in modo esplicito; i panic sono riservati ai bug." }
+  ]
+}

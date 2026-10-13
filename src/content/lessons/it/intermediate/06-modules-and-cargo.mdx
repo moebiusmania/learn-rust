@@ -1,0 +1,237 @@
+---
+title: Moduli, crate e Cargo
+description: Come si organizza il codice Rust, come funziona la privacy e come Cargo trasforma package, workspace e feature in build.
+duration: 22
+tags: [moduli, visibilità, crate, workspace, feature]
+---
+
+Il sistema dei moduli di Rust confonde molti nuovi arrivati per un motivo preciso: i file, da soli, non creano moduli. In JavaScript ogni file è un modulo; in Java la directory è il package. In Rust i moduli si dichiarano **esplicitamente nel codice**, e i file sono solo il posto dove capita che viva il loro contenuto. Capito questo, il resto discende da una sola regola: **tutto è privato per default**.
+
+## I moduli si dichiarano, non si scoprono
+
+Un crate parte dal suo file radice (`src/main.rs` o `src/lib.rs`). Ogni modulo deve essere dichiarato con `mod` da qualche parte sopra di lui nell'albero. Il corpo può essere inline, oppure in un file che il compilatore cerca per nome:
+
+```text
+src/
+├── main.rs        // mod net;   ← dichiara il modulo
+└── net/
+    ├── mod.rs     // oppure net.rs accanto a main.rs (preferito oggi)
+    ├── tcp.rs     // mod tcp;   dichiarato dentro net
+    └── http.rs    // mod http;
+```
+
+Un file che nessuna dichiarazione `mod` raggiunge semplicemente non viene compilato, ovunque si trovi. Non esiste un import di un'intera cartella né un file indice implicito.
+
+I percorsi funzionano come un file system con radice nel crate:
+
+| Percorso | Significato |
+| --- | --- |
+| `crate::net::tcp` | assoluto, dalla radice del crate |
+| `self::tcp` | relativo al modulo corrente |
+| `super::default_port` | il modulo padre |
+| `std::collections::HashMap` | un percorso dentro un altro crate (qui, la libreria standard) |
+
+`use` crea solo un alias locale per un percorso, come un link simbolico. Non carica nulla: l'albero dei moduli è già fissato dalle dichiarazioni `mod`.
+
+## La privacy è per modulo, non per tipo
+
+Ogni elemento (funzione, struct, campo, modulo, costante) è privato se non viene indicato altrimenti. In Rust "privato" significa: **visibile dentro il modulo in cui è dichiarato e in tutti i suoi discendenti**. È diverso da Java o C#, dove `private` è limitato alla classe. In Rust un modulo figlio può chiamare le funzioni private del padre, mentre un modulo fratello no.
+
+<Playground title="Un piccolo crate con moduli inline">
+```rust
+mod net {
+    pub mod tcp {
+        pub fn connect(addr: &str) -> String {
+            let port = super::default_port(); // un figlio vede gli elementi privati del padre
+            format!("tcp://{addr}:{port}")
+        }
+    }
+
+    mod http {
+        // modulo privato: solo `net` e i suoi discendenti possono raggiungerlo
+        pub fn get(path: &str) -> String {
+            format!("GET {path} via {}", super::tcp::connect("example.com"))
+        }
+    }
+
+    fn default_port() -> u16 {
+        443
+    }
+
+    // `pub use` riesporta un elemento privato sotto un percorso pubblico
+    pub use self::http::get as fetch;
+
+    pub struct Request {
+        pub path: String, // campo pubblico
+        retries: u8,      // campo privato: niente struct literal fuori da `net`
+    }
+
+    impl Request {
+        pub fn new(path: &str) -> Self {
+            Request { path: path.to_string(), retries: 3 }
+        }
+        pub fn retries(&self) -> u8 {
+            self.retries
+        }
+    }
+}
+
+use net::tcp;
+
+fn main() {
+    println!("{}", tcp::connect("localhost"));
+    println!("{}", net::fetch("/index.html"));
+
+    let req = net::Request::new("/api");
+    println!("{} (tentativi: {})", req.path, req.retries());
+}
+```
+</Playground>
+
+Tre dettagli meritano attenzione:
+
+- `http::get` è `pub`, eppure `main` non potrebbe chiamare direttamente `net::http::get`, perché il modulo `http` stesso è privato. **Ogni segmento di un percorso deve essere visibile.** `pub use` risolve il problema riesportando `get` come `net::fetch`, un percorso pubblico verso una posizione privata. Le librerie lo usano continuamente per offrire un'API piatta e stabile sopra una struttura interna che restano libere di cambiare.
+- **I campi delle struct hanno una visibilità propria.** Una `pub struct` con un campo privato non si può costruire con uno struct literal fuori dal suo modulo, quindi `Request::new` diventa l'unico costruttore. È così che Rust fa rispettare gli invarianti senza classi.
+- I blocchi `impl` non sono un'unità di privacy: i metodi seguono le stesse regole di modulo delle funzioni libere.
+
+Usa l'esploratore per verificare le regole di persona. Scegli dove è scritto il codice e cosa vuole usare:
+
+<ModuleTree />
+
+<Playground title="Errori di privacy" expectError>
+```rust
+mod net {
+    pub struct Request {
+        pub path: String,
+        retries: u8,
+    }
+
+    fn default_port() -> u16 {
+        443
+    }
+}
+
+fn main() {
+    // Due errori di privacy: un campo privato e una funzione privata.
+    let req = net::Request { path: "/".into(), retries: 1 };
+    let port = net::default_port();
+    println!("{} {}", req.path, port);
+}
+```
+</Playground>
+
+Il compilatore segnala per primo `E0603: function default_port is private`. Correggi quella riga (ad esempio rendendo la funzione `pub(crate)`) ed esegui di nuovo: ora compare `E0451: field retries of struct Request is private`. La privacy viene controllata per fasi, quindi gli errori possono emergere uno strato alla volta.
+
+### Visibilità più granulare
+
+Tra privato e `pub` esistono varianti con uno scope preciso:
+
+- `pub(crate)`: visibile ovunque nel crate corrente, mai esportato. È la scelta più comune per gli helper interni di una libreria.
+- `pub(super)`: visibile al modulo padre.
+- `pub(in crate::un::percorso)`: visibile dentro un antenato specifico.
+
+<Playground title="pub(crate) e pub(super)">
+```rust
+mod app {
+    pub mod config {
+        // visibile ovunque in questo crate, ma non nei crate che lo usano
+        pub(crate) const MAX_USERS: usize = 100;
+
+        pub mod parser {
+            // visibile solo al modulo padre (`config`)
+            pub(super) fn parse_line(line: &str) -> Option<(&str, &str)> {
+                line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+            }
+        }
+
+        pub fn load(text: &str) -> Vec<(String, String)> {
+            text.lines()
+                .filter_map(parser::parse_line)
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+    }
+}
+
+fn main() {
+    let cfg = app::config::load("name = demo\nport = 8080");
+    println!("{cfg:?}, utenti massimi: {}", app::config::MAX_USERS);
+    // app::config::parser::parse_line("a=b"); // errore: la funzione è privata
+}
+```
+</Playground>
+
+<Callout type="compare" from="Java / TypeScript">
+In Java `private` vale per la classe e `package-private` per la directory; in TypeScript `private` vale per la classe ed `export` per il file. Rust ha una sola unità di incapsulamento, il **modulo**, e una via d'uscita per ogni livello (`pub(super)`, `pub(crate)`, `pub`). Gli interni di un tipo sono nascosti agli altri moduli, non agli altri tipi dello stesso modulo: è per questo che di solito i test vivono in un modulo figlio, da cui vedono tutto.
+</Callout>
+
+## Crate e package
+
+Un **crate** è un'unità di compilazione: un albero di moduli, compilato in una libreria (`lib.rs`) o in un eseguibile (`main.rs`). Un **package** è ciò che descrive `Cargo.toml`: al massimo un crate di libreria, un numero qualsiasi di binari (`src/bin/*.rs`), più esempi, test e benchmark.
+
+La struttura abituale di un'applicazione è un `main.rs` sottile che interpreta gli argomenti e chiama il codice in `lib.rs`. La libreria diventa così testabile, e il binario è solo uno dei suoi utilizzatori. In `main.rs` ti riferisci alla libreria con il nome del package, esattamente come farebbe un utente esterno: `use timeparse::parse_time;`.
+
+## Workspace, dipendenze e feature
+
+Un **workspace** raggruppa più package che condividono un unico `Cargo.lock` e un'unica directory `target/`, così le dipendenze vengono risolte e compilate una volta sola:
+
+```toml
+# Cargo.toml nella radice del repository
+[workspace]
+members = ["core", "cli", "server"]
+resolver = "3"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+```
+
+```toml
+# server/Cargo.toml
+[package]
+name = "server"
+version = "0.3.1"
+edition = "2024"
+
+[dependencies]
+core = { path = "../core" }
+serde = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+
+[features]
+default = ["async"]
+async = ["dep:tokio"]
+```
+
+- **I requisiti di versione sono intervalli SemVer.** `"1.0"` significa `>=1.0.0, <2.0.0`. Cargo sceglie la versione compatibile più recente e registra quella esatta in `Cargo.lock`. Fai commit del file di lock: rende riproducibili build e CI. Per le librerie influisce solo sulle tue build, perché chi le usa risolve le versioni con il proprio file di lock.
+- **Le feature** sono flag di compilazione additivi. Il codice si attiva con `#[cfg(feature = "async")]`, e le dipendenze opzionali vengono scaricate e compilate solo quando una feature le abilita. Poiché le feature vengono unificate su tutto il grafo delle dipendenze, non devono mai togliere funzionalità.
+- **Lo stesso crate può comparire in due major version** nella stessa build (`rand 0.8` e `rand 0.9`). Per il compilatore sono crate diversi, quindi i loro tipi non sono intercambiabili, ma non si rompe nulla.
+
+<Callout type="runtime">
+Ogni crate viene compilato separatamente, e per una libreria il risultato è un `.rlib`: codice oggetto più metadati che descrivono gli elementi pubblici, i generici e le funzioni che si possono mettere inline. Le funzioni generiche non si possono compilare in anticipo, quindi la loro MIR viaggia nei metadati e viene monomorfizzata nel crate che le usa. Ecco perché modificare una funzione generica molto usata fa ricompilare chi ne dipende, e perché `cargo build` mantiene una cache per crate in `target/`.
+</Callout>
+
+## Profili di build
+
+I profili controllano come vengono compilati i crate. `dev` è usato da `cargo build` e `cargo run`, `release` da `--release`:
+
+```toml
+[profile.release]
+opt-level = 3       # default
+lto = "thin"        # ottimizzazione al link tra crate diversi
+codegen-units = 1   # build più lenta, ottimizzazione migliore
+panic = "abort"     # binario più piccolo, niente unwinding
+
+[profile.dev.package."*"]
+opt-level = 2       # ottimizza le dipendenze anche nelle build di debug
+```
+
+L'ultimo blocco è un trucco molto diffuso: il tuo codice resta veloce da compilare e facile da debuggare, mentre le dipendenze pesanti (codec di immagini, crittografia, fisica) girano a velocità quasi da release.
+
+## Punti chiave
+
+- I moduli si dichiarano con `mod`; i file ne contengono solo il corpo. Un file non raggiungibile dalla radice non viene compilato.
+- Tutto è privato per default. Privato significa visibile nel modulo che lo dichiara e nei suoi discendenti.
+- Ogni segmento di un percorso deve essere visibile; `pub use` riesporta elementi per costruire un'API pubblica pulita.
+- I campi delle struct hanno una visibilità propria: è così che si impongono costruttori e invarianti.
+- Un package contiene al massimo una libreria e molti binari; un workspace condivide file di lock e directory di build tra più package.
+- Le dipendenze usano intervalli SemVer fissati da `Cargo.lock`; le feature sono additive e unificate su tutto il grafo.

@@ -1,0 +1,23 @@
+{
+  "title": "Cargo al lavoro",
+  "subtitle": "Scegli un comando per vedere cosa stampa per un piccolo crate di libreria",
+  "simulation": "output simulato",
+  "replay": "Ripeti",
+  "commands": {
+    "test": {
+      "explain": "Tre binari di test separati vengono eseguiti in sequenza: gli unit test compilati da <code>src/</code> con <code>cfg(test)</code>, ogni file in <code>tests/</code> come crate a sé, e infine ogni blocco di codice nei commenti di documentazione. I test di uno stesso binario girano in parallelo su più thread."
+    },
+    "clippy": {
+      "explain": "Clippy esegue il front end del compilatore più centinaia di lint aggiuntivi raggruppati per categoria (style, correctness, complexity, perf, pedantic). La maggior parte propone una correzione applicabile in automatico: <code>cargo clippy --fix</code>. In CI, <code>-- -D warnings</code> trasforma i warning in errori."
+    },
+    "fmt": {
+      "explain": "<code>--check</code> non modifica i file: stampa un diff ed esce con stato 1, esattamente ciò che serve in CI. In locale, <code>cargo fmt</code> riscrive i file. Lo stile canonico è uno solo, quindi la formattazione non è mai argomento di code review."
+    },
+    "doc": {
+      "explain": "rustdoc trasforma i tuoi commenti <code>///</code> (in Markdown) in un sito HTML statico, con collegamenti alla documentazione delle dipendenze. Lo stesso strumento alimenta docs.rs, dove ogni crate pubblicato su crates.io riceve la propria documentazione generata in automatico."
+    },
+    "release": {
+      "explain": "Il profilo release attiva <code>opt-level = 3</code>, rimuove le debug assertion e i controlli di overflow sugli interi, e scrive in <code>target/release/</code>. Compila più lentamente, ma spesso gira molto più veloce: non fare mai benchmark su una build di debug."
+    }
+  }
+}

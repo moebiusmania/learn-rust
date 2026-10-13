@@ -1,0 +1,380 @@
+---
+/**
+ * Drop order stepper: the code, an SVG stack of live values and the
+ * program's real output (it matches what the Playground prints).
+ * Snapshots are language-neutral; captions live in
+ * src/i18n/locales/<lang>/widgets/drop-order.json.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+import { highlightRustLines } from '@/scripts/rust-highlight';
+
+interface Strings {
+  title: string; subtitle: string; prev: string; next: string; restart: string;
+  stack: string; log: string; empty: string; noValues: string; step: string; noisyNote: string;
+  presets: { label: string; steps: string[] }[];
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'drop-order');
+
+interface Value {
+  id: string;
+  label: string;
+  /** owning stack frame, shown as a tag */
+  tag?: string;
+  /** a call-frame divider rather than a value */
+  frame?: boolean;
+  /** Drop::drop is running on this value */
+  dropping?: boolean;
+  parts?: { label: string; gone?: boolean }[];
+}
+interface Snap { line: number; values: Value[]; log: string[] }
+
+const A: Value = { id: 'a', label: 'a' };
+const B: Value = { id: 'b', label: 'b' };
+const C: Value = { id: 'c', label: 'c' };
+const D: Value = { id: 'd', label: 'd' };
+const X: Value = { id: 'x', label: 'x' };
+const T: Value = { id: 't', label: 't' };
+const pair = (dropping = false, gone = 0): Value => ({
+  id: 'p', label: 'p: Pair', dropping,
+  parts: [{ label: 'first', gone: gone > 0 }, { label: 'second', gone: gone > 1 }],
+});
+const vec = (gone = 0): Value => ({
+  id: 'v', label: 'v: Vec', dropping: gone > 0,
+  parts: ['v0', 'v1', 'v2'].map((label, i) => ({ label, gone: i < gone })),
+});
+const M: Value = { id: 'm', label: '_m', tag: 'main' };
+const FRAME: Value = { id: 'f', label: 'inner()', frame: true };
+const G: Value = { id: 'g', label: '_g', tag: 'inner' };
+const PANIC = ["!thread 'main' panicked at src/main.rs:3:5:", '!boom'];
+
+const presets: { code: string; snaps: Snap[] }[] = [
+  {
+    code: `fn main() {
+    let a = Noisy("a");
+    {
+        let b = Noisy("b");
+        let c = Noisy("c");
+    }
+    let d = Noisy("d");
+}`,
+    snaps: [
+      { line: 2, values: [A], log: [] },
+      { line: 4, values: [A, B], log: [] },
+      { line: 5, values: [A, B, C], log: [] },
+      { line: 6, values: [A, B], log: ['drop c'] },
+      { line: 6, values: [A], log: ['drop c', 'drop b'] },
+      { line: 7, values: [A, D], log: ['drop c', 'drop b'] },
+      { line: 8, values: [A], log: ['drop c', 'drop b', 'drop d'] },
+      { line: 8, values: [], log: ['drop c', 'drop b', 'drop d', 'drop a'] },
+    ],
+  },
+  {
+    code: `struct Pair { first: Noisy, second: Noisy }
+impl Drop for Pair {
+    fn drop(&mut self) { println!("drop Pair"); }
+}
+
+fn main() {
+    let x = Noisy("x");
+    let p = Pair { first: Noisy("first"), second: Noisy("second") };
+}`,
+    snaps: [
+      { line: 7, values: [X], log: [] },
+      { line: 8, values: [X, pair()], log: [] },
+      { line: 3, values: [X, pair(true)], log: ['drop Pair'] },
+      { line: 9, values: [X, pair(true, 1)], log: ['drop Pair', 'drop first'] },
+      { line: 9, values: [X], log: ['drop Pair', 'drop first', 'drop second'] },
+      { line: 9, values: [], log: ['drop Pair', 'drop first', 'drop second', 'drop x'] },
+    ],
+  },
+  {
+    code: `fn main() {
+    let v = vec![Noisy("v0"), Noisy("v1"), Noisy("v2")];
+    let t = Noisy("t");
+}`,
+    snaps: [
+      { line: 2, values: [vec()], log: [] },
+      { line: 3, values: [vec(), T], log: [] },
+      { line: 4, values: [vec()], log: ['drop t'] },
+      { line: 4, values: [vec(1)], log: ['drop t', 'drop v0'] },
+      { line: 4, values: [vec(2)], log: ['drop t', 'drop v0', 'drop v1'] },
+      { line: 4, values: [], log: ['drop t', 'drop v0', 'drop v1', 'drop v2'] },
+    ],
+  },
+  {
+    code: `fn inner() {
+    let _g = Noisy("inner guard");
+    panic!("boom");
+}
+
+fn main() {
+    let _m = Noisy("main guard");
+    inner();
+    println!("never printed");
+}`,
+    snaps: [
+      { line: 7, values: [M], log: [] },
+      { line: 8, values: [M, FRAME], log: [] },
+      { line: 2, values: [M, FRAME, G], log: [] },
+      { line: 3, values: [M, FRAME, G], log: PANIC },
+      { line: 4, values: [M, FRAME], log: [...PANIC, 'drop inner guard'] },
+      { line: 8, values: [], log: [...PANIC, 'drop inner guard', 'drop main guard'] },
+      { line: 8, values: [], log: [...PANIC, 'drop inner guard', 'drop main guard', '#exit code 101'] },
+    ],
+  },
+];
+
+const codeLines = presets.map((p) => highlightRustLines(p.code));
+---
+<WidgetFrame
+  tag="drop-order"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="layers"
+  data-snaps={JSON.stringify(presets.map((p) => p.snaps))}
+  data-captions={JSON.stringify(s.presets.map((p) => p.steps))}
+  data-step-label={s.step}
+  data-empty={s.empty}
+  data-no-values={s.noValues}
+>
+  <div class="seg do-presets" role="group" aria-label={s.title}>
+    {s.presets.map((p, i) => <button type="button" data-preset-btn={i} aria-pressed={i === 0 ? 'true' : 'false'}>{p.label}</button>)}
+  </div>
+
+  <div class="do-code">
+    <p class="do-note"><code>Noisy</code> · {s.noisyNote}</p>
+    {codeLines.map((lines, i) => (
+      <pre class="code-lines" data-preset={i} hidden={i !== 0}>{lines.map((l) => <span class="ln" set:html={l} />)}</pre>
+    ))}
+  </div>
+
+  <div class="do-grid">
+    <div class="do-panel">
+      <span class="do-label">{s.stack}</span>
+      <svg class="do-stack" viewBox="0 0 300 236" role="img" aria-label={s.stack}>
+        <line x1="10" y1="226" x2="290" y2="226" class="do-floor" />
+        <g class="do-values"></g>
+        <text x="150" y="120" text-anchor="middle" class="do-none">{s.noValues}</text>
+      </svg>
+    </div>
+    <div class="do-panel">
+      <span class="do-label">{s.log}</span>
+      <ol class="do-log" aria-live="polite"></ol>
+    </div>
+  </div>
+
+  <div class="widget-caption" aria-live="polite"><p class="do-caption"></p></div>
+
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm btn-ghost" data-prev><Icon name="prev" size={14} />{s.prev}</button>
+    <button type="button" class="btn btn-sm" data-next>{s.next}<Icon name="next" size={14} /></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-restart><Icon name="reset" size={14} />{s.restart}</button>
+    <span class="steps-dots" aria-hidden="true"></span>
+    <span class="do-count muted"></span>
+  </div>
+</WidgetFrame>
+
+<script>
+  interface Value {
+    id: string; label: string; tag?: string; frame?: boolean; dropping?: boolean;
+    parts?: { label: string; gone?: boolean }[];
+  }
+  interface Snap { line: number; values: Value[]; log: string[] }
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const SLOT = 48;
+  const FRAME_H = 26;
+  const FLOOR = 226;
+
+  function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}, text?: string) {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  class DropOrder extends HTMLElement {
+    #snaps: Snap[][] = [];
+    #captions: string[][] = [];
+    #preset = 0;
+    #i = 0;
+    #nodes = new Map<string, SVGGElement>();
+
+    connectedCallback() {
+      this.#snaps = JSON.parse(this.dataset.snaps ?? '[]');
+      this.#captions = JSON.parse(this.dataset.captions ?? '[]');
+      this.querySelectorAll<HTMLButtonElement>('[data-preset-btn]').forEach((b) =>
+        b.addEventListener('click', () => this.#setPreset(Number(b.dataset.presetBtn))),
+      );
+      this.querySelector('[data-prev]')!.addEventListener('click', () => this.#go(this.#i - 1));
+      this.querySelector('[data-next]')!.addEventListener('click', () => this.#go(this.#i + 1));
+      this.querySelector('[data-restart]')!.addEventListener('click', () => this.#go(0));
+      this.#setPreset(0);
+    }
+
+    #setPreset(p: number) {
+      this.#preset = p;
+      this.querySelectorAll<HTMLButtonElement>('[data-preset-btn]').forEach((b) =>
+        b.setAttribute('aria-pressed', String(Number(b.dataset.presetBtn) === p)),
+      );
+      this.querySelectorAll<HTMLElement>('.do-code [data-preset]').forEach((el) => (el.hidden = Number(el.dataset.preset) !== p));
+      this.querySelector('.do-values')!.replaceChildren();
+      this.#nodes.clear();
+      this.querySelector('.steps-dots')!.innerHTML = this.#snaps[p]!.map(() => '<span></span>').join('');
+      this.#go(0);
+    }
+
+    #build(v: Value): SVGGElement {
+      const outer = el('g', { class: 'do-slot' });
+      const inner = el('g', { class: v.frame ? 'do-val do-frame' : 'do-val' });
+      if (v.frame) {
+        inner.append(
+          el('line', { x1: 16, y1: FRAME_H / 2, x2: 284, y2: FRAME_H / 2, class: 'do-frame-line' }),
+          el('rect', { x: 110, y: 3, width: 80, height: 20, rx: 10, class: 'do-frame-pill' }),
+          el('text', { x: 150, y: 17, 'text-anchor': 'middle', class: 'do-frame-text' }, v.label),
+        );
+      } else {
+        inner.append(
+          el('rect', { x: 16, y: 4, width: 268, height: SLOT - 8, rx: 10, class: 'do-box' }),
+          el('text', { x: 32, y: SLOT / 2 + 5, class: 'do-name' }, v.label),
+        );
+        if (v.tag) inner.append(el('text', { x: 272, y: SLOT / 2 + 4, 'text-anchor': 'end', class: 'do-tag' }, v.tag));
+        v.parts?.forEach((part, k) => {
+          const x = 128 + k * 52;
+          const chip = el('g', { class: 'do-part', 'data-part': k });
+          chip.append(
+            el('rect', { x, y: 12, width: 46, height: SLOT - 24, rx: 6 }),
+            el('text', { x: x + 23, y: SLOT / 2 + 4, 'text-anchor': 'middle' }, part.label),
+          );
+          inner.append(chip);
+        });
+      }
+      outer.append(inner);
+      return outer;
+    }
+
+    #renderStack(values: Value[]) {
+      const layer = this.querySelector<SVGGElement>('.do-values')!;
+      const keep = new Set(values.map((v) => v.id));
+      for (const [id, node] of this.#nodes) {
+        if (keep.has(id)) continue;
+        this.#nodes.delete(id);
+        node.classList.add('is-leaving');
+        setTimeout(() => node.remove(), 450);
+      }
+      let y = FLOOR;
+      values.forEach((v) => {
+        let node = this.#nodes.get(v.id);
+        if (!node) {
+          node = this.#build(v);
+          this.#nodes.set(v.id, node);
+          layer.append(node);
+        }
+        y -= v.frame ? FRAME_H : SLOT;
+        node.style.transform = `translate(0px, ${y}px)`;
+        node.classList.toggle('is-dropping', !!v.dropping);
+        v.parts?.forEach((part, k) =>
+          node!.querySelector(`[data-part="${k}"]`)?.classList.toggle('is-gone', !!part.gone),
+        );
+      });
+      this.querySelector<SVGTextElement>('.do-none')!.style.opacity = values.length ? '0' : '1';
+    }
+
+    #renderLog(lines: string[]) {
+      const log = this.querySelector<HTMLOListElement>('.do-log')!;
+      if (!lines.length) {
+        log.innerHTML = `<li class="do-empty">${this.dataset.empty}</li>`;
+        return;
+      }
+      const prev = log.querySelectorAll('li:not(.do-empty)').length;
+      log.replaceChildren(
+        ...lines.map((line, k) => {
+          const li = document.createElement('li');
+          const kind = line[0] === '!' ? 'do-err' : line[0] === '#' ? 'do-meta' : '';
+          li.textContent = kind ? line.slice(1) : line;
+          if (kind) li.classList.add(kind);
+          if (k >= prev) li.classList.add('is-new');
+          return li;
+        }),
+      );
+    }
+
+    #go(i: number) {
+      const snaps = this.#snaps[this.#preset]!;
+      this.#i = Math.max(0, Math.min(snaps.length - 1, i));
+      const snap = snaps[this.#i]!;
+      this.querySelectorAll(`.do-code [data-preset="${this.#preset}"] .ln`).forEach((ln, k) =>
+        ln.classList.toggle('is-active', k + 1 === snap.line),
+      );
+      this.#renderStack(snap.values);
+      this.#renderLog(snap.log);
+      this.querySelector('.do-caption')!.innerHTML = this.#captions[this.#preset]?.[this.#i] ?? '';
+      this.querySelectorAll('.steps-dots span').forEach((d, k) => d.classList.toggle('on', k === this.#i));
+      this.querySelector('.do-count')!.textContent = (this.dataset.stepLabel ?? '')
+        .replace('{n}', String(this.#i + 1))
+        .replace('{total}', String(snaps.length));
+      (this.querySelector('[data-prev]') as HTMLButtonElement).disabled = this.#i === 0;
+      (this.querySelector('[data-next]') as HTMLButtonElement).disabled = this.#i === snaps.length - 1;
+    }
+  }
+  customElements.define('drop-order', DropOrder);
+</script>
+
+<style>
+  drop-order { display: block; }
+  .do-presets { justify-self: start; flex-wrap: wrap; }
+  .do-code { display: grid; gap: var(--space-2); }
+  .do-code [hidden] { display: none; }
+  .do-code .code-lines { font-size: 0.78rem; }
+  .do-note { font-size: 0.75rem; color: var(--text-faint); margin: 0; }
+  .do-note code { font-family: var(--font-mono); color: var(--tok-type); }
+
+  .do-grid { display: grid; gap: var(--space-4); }
+  @container widget (width >= 36rem) { .do-grid { grid-template-columns: 1.15fr 1fr; } }
+  .do-panel { display: grid; gap: var(--space-2); align-content: start; min-inline-size: 0; }
+  .do-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); }
+
+  .do-stack { inline-size: 100%; block-size: auto; background: var(--surface-2); border-radius: var(--radius); font-family: var(--font-mono); }
+  .do-floor { stroke: var(--border-strong); stroke-width: 2; stroke-linecap: round; }
+  .do-none { font-size: 12px; fill: var(--text-faint); font-family: var(--font-sans); font-style: italic; transition: opacity var(--dur); }
+
+  .do-stack :global(.do-slot) { transition: transform 450ms var(--ease-spring), opacity 400ms; }
+  .do-stack :global(.do-val) { animation: do-in 420ms var(--ease-out) both; }
+  @keyframes do-in { from { opacity: 0; transform: translateY(-18px); } }
+  .do-stack :global(.is-leaving) { opacity: 0; }
+  .do-stack :global(.is-leaving .do-val) { transform: translateX(40px); transition: transform 400ms var(--ease-out); }
+  .do-stack :global(.is-leaving .do-box) { stroke: var(--invalid); fill: color-mix(in oklch, var(--invalid) 14%, var(--surface)); }
+
+  .do-stack :global(.do-box) {
+    fill: var(--surface); stroke: var(--stack); stroke-width: 1.5;
+    transition: stroke var(--dur), fill var(--dur);
+  }
+  .do-stack :global(.is-dropping .do-box) { stroke: var(--invalid); stroke-dasharray: 5 4; fill: color-mix(in oklch, var(--invalid) 7%, var(--surface)); }
+  .do-stack :global(.do-name) { font-size: 14px; font-weight: 700; fill: var(--text); }
+  .do-stack :global(.do-tag) { font-size: 10px; fill: var(--text-faint); letter-spacing: 0.05em; }
+  .do-stack :global(.do-part rect) { fill: color-mix(in oklch, var(--heap) 14%, var(--surface)); stroke: var(--heap); transition: fill var(--dur), stroke var(--dur), opacity var(--dur); }
+  .do-stack :global(.do-part text) { font-size: 11px; fill: var(--heap); transition: opacity var(--dur); }
+  .do-stack :global(.do-part.is-gone rect) { stroke: var(--invalid); stroke-dasharray: 3 3; fill: transparent; opacity: 0.6; }
+  .do-stack :global(.do-part.is-gone text) { fill: var(--invalid); opacity: 0.6; text-decoration: line-through; }
+  .do-stack :global(.do-frame-line) { stroke: var(--border-strong); stroke-dasharray: 4 4; }
+  .do-stack :global(.do-frame-pill) { fill: var(--surface-3); stroke: var(--border-strong); }
+  .do-stack :global(.do-frame-text) { font-size: 11px; fill: var(--text-muted); }
+
+  .do-log {
+    list-style: none; margin: 0; padding: var(--space-3); min-block-size: 8rem;
+    display: block;
+    border-radius: var(--radius); background: var(--code-bg); border: 1px solid var(--code-border);
+    font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.7;
+    counter-reset: out;
+  }
+  .do-log :global(li) { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .do-log :global(li.is-new) { animation: do-log-in 500ms var(--ease-out); }
+  @keyframes do-log-in { from { opacity: 0; translate: -8px 0; background: var(--accent-soft); } }
+  .do-log :global(.do-err) { color: color-mix(in oklch, var(--danger) 75%, var(--text)); }
+  .do-log :global(.do-meta) { color: var(--text-faint); font-style: italic; }
+  .do-log :global(.do-empty) { color: var(--text-faint); font-style: italic; }
+  .do-count { font-size: 0.78rem; margin-inline-start: auto; }
+  .do-caption { margin: 0; }
+</style>

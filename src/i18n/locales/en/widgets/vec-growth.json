@@ -1,0 +1,30 @@
+{
+  "title": "Inside a Vec<i32>",
+  "subtitle": "Push, pop and shrink, and watch the heap buffer",
+  "push": "push",
+  "push10": "push ×10",
+  "pop": "pop",
+  "shrink": "shrink_to_fit",
+  "clear": "clear",
+  "stack": "STACK",
+  "heap": "HEAP",
+  "freed": "freed",
+  "len": "len",
+  "capacity": "capacity",
+  "heapBytes": "heap bytes",
+  "reallocs": "reallocations",
+  "bytesCopied": "bytes copied",
+  "captions": {
+    "initial": "<code>Vec::new()</code> does not allocate: capacity is 0 and the pointer is a dangling, well-aligned placeholder. The first <code>push</code> allocates.",
+    "push": "<code>len</code> &lt; <code>capacity</code>, so the value is written into spare space: no allocation, O(1).",
+    "pushRealloc": "The buffer was full. The Vec allocated a new buffer of capacity <strong>{new}</strong> (was {old}), moved {bytes} bytes into it and freed the old one. Doubling keeps <code>push</code> amortized O(1).",
+    "pop": "<code>pop</code> returns <code>Some(value)</code> and decrements <code>len</code>. Capacity is kept for future pushes.",
+    "popEmpty": "The Vec is empty: <code>pop</code> returns <code>None</code>. No exception, no undefined.",
+    "shrink": "<code>shrink_to_fit</code> reallocated to exactly <code>len</code> elements, giving {saved} bytes back to the allocator.",
+    "shrinkNoop": "Capacity already equals length, nothing to shrink.",
+    "shrinkFree": "With <code>len == 0</code>, shrinking frees the buffer entirely and the Vec is back to its non-allocating state.",
+    "clear": "<code>clear</code> drops every element and sets <code>len</code> to 0, but keeps the allocation: refilling it costs no reallocation.",
+    "full": "This demo stops at {max} elements, but a real Vec keeps doubling until memory runs out.",
+    "firstAlloc": "The first <code>push</code> allocates a buffer for <strong>4</strong> elements (16 bytes): a minimum capacity that avoids reallocating for tiny vectors."
+  }
+}

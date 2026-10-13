@@ -1,0 +1,17 @@
+{
+  "title": "Tuning the release profile",
+  "subtitle": "Change the knobs and watch the trade-offs move",
+  "disclaimer": "Illustrative trends relative to the default release profile (1.0×), not measurements: real numbers depend heavily on your code and target. Shorter bars are better.",
+  "presetsLabel": "Presets",
+  "presets": { "default": "Default --release", "speed": "Max speed", "size": "Smallest binary" },
+  "metrics": { "compile": "Compile time", "size": "Binary size", "runtime": "Run time" },
+  "baseline": "default",
+  "toml": "Cargo.toml",
+  "knobs": {
+    "opt": { "label": "opt-level", "help": "<code>opt-level</code> selects the LLVM optimization pipeline. <code>3</code> is the release default, <code>s</code>/<code>z</code> optimize for size (and often lose some speed), <code>0</code> is what debug builds use." },
+    "lto": { "label": "lto", "help": "Link-time optimization lets LLVM inline and remove code across crate boundaries. <code>thin</code> is a cheaper, parallel variant; <code>fat</code> merges everything into one module: smallest and fastest, slowest to build." },
+    "cgu": { "label": "codegen-units", "help": "The crate is split into units compiled in parallel. <code>16</code> builds faster; <code>1</code> gives the optimizer the whole crate at once, for slightly better code." },
+    "panic": { "label": "panic", "help": "<code>abort</code> removes the unwinding tables and landing pads: smaller binaries and slightly less code in hot paths, but destructors no longer run on panic and <code>catch_unwind</code> stops working." },
+    "strip": { "label": "strip", "help": "Strips symbol names from the final binary. Big size win, no runtime effect, but stack traces and profilers lose function names unless you keep separate debug info." }
+  }
+}

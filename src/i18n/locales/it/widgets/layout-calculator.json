@@ -1,0 +1,17 @@
+{
+  "title": "Calcolatore di layout delle struct",
+  "subtitle": "Aggiungi campi, cambia rappresentazione, osserva il padding",
+  "add": "Aggiungi un campo",
+  "fields": "Campi (ordine di dichiarazione)",
+  "remove": "Rimuovi campo",
+  "clear": "Svuota",
+  "empty": "Nessun campo: una struct senza campi è un tipo a dimensione zero (size 0, align 1).",
+  "size": "size_of",
+  "align": "align_of",
+  "padding": "padding",
+  "bytes": "byte",
+  "memory": "Memoria, 8 byte per riga",
+  "pad": "pad",
+  "reprRust": "Default: il compilatore può riordinare i campi. Oggi rustc li ordina per allineamento decrescente, cosa che minimizza il padding, ma questo ordine <strong>non è garantito</strong> e può cambiare tra una versione e l'altra del compilatore.",
+  "reprC": "<code>#[repr(C)]</code>: i campi restano nell'ordine di dichiarazione e ognuno è allineato come farebbe il C. Prevedibile, necessario per l'FFI, ma spesso più grande."
+}

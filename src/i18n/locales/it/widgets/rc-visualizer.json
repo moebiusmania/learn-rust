@@ -1,0 +1,30 @@
+{
+  "title": "Dentro un Rc",
+  "subtitle": "Clona, degrada, promuovi e rilascia: osserva i contatori",
+  "stack": "STACK",
+  "heap": "HEAP",
+  "strong": "strong",
+  "weak": "weak",
+  "dropped": "valore rilasciato",
+  "freed": "allocazione liberata",
+  "empty": "vuota",
+  "buttons": {
+    "clone": "Rc::clone",
+    "downgrade": "Rc::downgrade",
+    "upgrade": "upgrade()",
+    "drop": "drop",
+    "reset": "Ripristina"
+  },
+  "captions": {
+    "start": "<code>Rc::new</code> alloca un blocco sullo heap che contiene due contatori e il valore. <code>a</code> è l'unico proprietario strong.",
+    "clone": "<code>Rc::clone</code> copia il puntatore in {v} e incrementa il contatore strong. Il vettore in sé non viene copiato.",
+    "downgrade": "<code>Rc::downgrade</code> dà a {v} un <code>Weak</code>: il contatore weak sale, ma un puntatore weak non tiene in vita il valore.",
+    "upgradeOk": "<code>upgrade()</code> ha restituito <code>Some(Rc)</code>: il valore è ancora vivo, quindi {v} diventa un nuovo proprietario strong. Il Weak da cui è partito esiste ancora.",
+    "upgradeNone": "<code>upgrade()</code> ha restituito <code>None</code>: non resta nessun proprietario strong e il valore non c'è più. È così che Weak spezza i cicli in modo sicuro.",
+    "dropStrong": "Rilasciare {v} decrementa il contatore strong. Gli altri proprietari tengono in vita il valore.",
+    "dropLast": "{v} era l'ultimo proprietario strong: il valore viene rilasciato adesso (gira il suo <code>Drop</code> e il Vec libera il suo buffer). Il blocco resta allocato perché i puntatori weak puntano ancora ai contatori.",
+    "dropWeak": "Rilasciare il Weak in {v} decrementa il contatore weak. Non tocca mai il valore.",
+    "freedAfterWeak": "Anche l'ultimo Weak se n'è andato: entrambi i contatori sono a zero, quindi il blocco stesso viene deallocato. Premi Ripristina per ricominciare.",
+    "freedAll": "{v} era l'ultimo proprietario e non ci sono puntatori weak: il valore viene rilasciato e il blocco deallocato in un colpo solo. Premi Ripristina per ricominciare."
+  }
+}

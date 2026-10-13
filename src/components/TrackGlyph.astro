@@ -1,0 +1,29 @@
+---
+/** Isometric stack whose height encodes the track level (1–3). */
+interface Props { level: 1 | 2 | 3 }
+const { level } = Astro.props;
+const layers = Array.from({ length: 3 }, (_, i) => i);
+---
+<svg class="track-glyph" viewBox="0 0 120 100" aria-hidden="true" data-level={level}>
+  {
+    layers.map((i) => (
+      <g class:list={['layer', { on: i < level }]} style={`--i:${i}`} transform={`translate(0 ${-i * 16})`}>
+        <path class="side-l" d="M20 62 60 82v10L20 72z" />
+        <path class="side-r" d="M100 62 60 82v10l40-20z" />
+        <path class="top" d="M60 42 100 62 60 82 20 62z" />
+      </g>
+    ))
+  }
+</svg>
+<style>
+  .track-glyph { inline-size: 5.5rem; block-size: auto; overflow: visible; }
+  .layer { transition: translate 500ms var(--ease-spring); translate: 0 0; }
+  .layer .top { fill: var(--surface-3); stroke: var(--border-strong); stroke-width: 1; }
+  .layer .side-l { fill: var(--surface-2); stroke: var(--border-strong); }
+  .layer .side-r { fill: var(--surface-3); stroke: var(--border-strong); }
+  .layer.on .top { fill: color-mix(in oklch, var(--accent) 55%, var(--surface)); stroke: var(--accent-strong); }
+  .layer.on .side-l { fill: color-mix(in oklch, var(--accent) 35%, var(--surface)); stroke: var(--accent-strong); }
+  .layer.on .side-r { fill: color-mix(in oklch, var(--accent) 75%, var(--surface)); stroke: var(--accent-strong); }
+  .layer:not(.on) { opacity: 0.5; }
+  :global(:is(a, .track-card):hover) .layer { translate: 0 calc(var(--i) * -5px); }
+</style>

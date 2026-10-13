@@ -1,0 +1,226 @@
+---
+title: Prestazioni e astrazioni a costo zero
+description: Perché il Rust idiomatico compila in codice compatto, quali impostazioni di build contano e come trovare ed eliminare i costi che restano.
+duration: 25
+tags: [costo zero, profilo release, LTO, allocazioni, profiling]
+---
+
+Rust è veloce per gli stessi motivi per cui lo sono C e C++: compilazione anticipata, valori disposti in linea invece che inscatolati dietro puntatori, nessun garbage collector e un ottimizzatore (LLVM) su cui si lavora da decenni. Quello che Rust aggiunge è che il codice *idiomatico*, con iteratori, closure, generici e `Option`, di solito compila nello stesso codice macchina della versione a basso livello. Questa lezione parla di come fidarsi di questo, di quali sono i limiti e di come misurare invece di tirare a indovinare.
+
+## Astrazioni a costo zero
+
+La definizione di Bjarne Stroustrup, adottata da Rust: *quello che non usi non lo paghi; e quello che usi non potresti scriverlo meglio a mano.* Una catena di iteratori è l'esempio per eccellenza. `filter` e `map` sono struct generiche che avvolgono delle closure; dopo monomorfizzazione e inlining, l'intera catena si fonde in un unico ciclo, senza allocazioni, senza chiamate virtuali e senza collezioni intermedie.
+
+<Playground title="Catena di iteratori contro ciclo scritto a mano" mode="release">
+```rust
+use std::hint::black_box;
+use std::time::Instant;
+
+fn sum_loop(data: &[u32]) -> u64 {
+    let mut total = 0u64;
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] % 3 == 0 {
+            total += data[i] as u64 * 2;
+        }
+        i += 1;
+    }
+    total
+}
+
+fn sum_iter(data: &[u32]) -> u64 {
+    data.iter()
+        .filter(|&&x| x % 3 == 0)
+        .map(|&x| x as u64 * 2)
+        .sum()
+}
+
+fn main() {
+    let data: Vec<u32> = (0..20_000_000).collect();
+    for round in 1..=2 {
+        for (name, f) in [("ciclo", sum_loop as fn(&[u32]) -> u64), ("iter", sum_iter)] {
+            let start = Instant::now();
+            let result = f(black_box(&data));
+            println!("giro {round} {name}: {result} in {:?}", start.elapsed());
+        }
+    }
+}
+```
+</Playground>
+
+Questo playground compila in modalità **release**; le due versioni impiegano lo stesso tempo, a meno del rumore su un server condiviso. Il primo giro è spesso più lento per entrambe perché i dati non sono ancora in cache: uno dei tanti motivi per cui i micro-benchmark hanno bisogno di uno strumento apposito (ne parliamo più avanti).
+
+<Compare left="JavaScript">
+```js
+// Ogni passaggio alloca un nuovo array
+// e chiama una closure tramite il JIT.
+const total = data
+  .filter((x) => x % 3 === 0)
+  .map((x) => x * 2)
+  .reduce((a, b) => a + b, 0);
+```
+
+```rust
+// Adattatori pigri, fusi in un unico ciclo in
+// compilazione: nessun Vec intermedio.
+let total: u64 = data
+    .iter()
+    .filter(|&&x| x % 3 == 0)
+    .map(|&x| x as u64 * 2)
+    .sum();
+```
+</Compare>
+
+<Callout type="runtime">
+"Costo zero" si riferisce al runtime. Il costo si sposta su **tempo di compilazione e dimensione del binario**: ogni closure distinta e ogni tipo concreto crea una nuova copia monomorfizzata del codice generico che LLVM deve ottimizzare. Ecco perché i crate molto generici compilano lentamente, e perché a volte `dyn Trait` è la scelta giusta per tenere sotto controllo tempi di build e binari, al prezzo di una chiamata indiretta.
+</Callout>
+
+### I controlli sui limiti, e come li evitano gli iteratori
+
+L'accesso per indice a una slice (`data[i]`) è controllato: un indice fuori dai limiti provoca un panic invece di leggere memoria a caso. Il controllo è un confronto più un salto ben predetto, economico ma non gratuito, e può impedire la vettorizzazione. L'ottimizzatore lo elimina quando riesce a dimostrare che l'indice è valido, cosa che gli riesce facilmente con gli iteratori e con i cicli limitati da `len()`:
+
+```rust
+// Controllo dei limiti a ogni b[i]: il compilatore non può dimostrare che b.len() >= a.len()
+fn dot_indexed(a: &[f32], b: &[f32]) -> f32 {
+    let mut s = 0.0;
+    for i in 0..a.len() { s += a[i] * b[i]; }
+    s
+}
+
+// Nessun controllo: zip si ferma alla slice più corta, quindi ogni accesso è valido
+fn dot_zip(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+```
+
+Quando ti serve davvero l'accesso per indice in un ciclo critico, un'unica asserzione iniziale come `assert!(b.len() >= a.len())` oppure una nuova slice `let b = &b[..a.len()];` di solito permette a LLVM di togliere i controlli dentro il ciclo. Esiste `get_unchecked`, ma è `unsafe` e serve di rado.
+
+## Il profilo release
+
+`cargo build` produce una build di debug: nessuna ottimizzazione, informazioni di debug complete, controlli di overflow attivi. Può essere facilmente da 10 a 50 volte più lenta della release, quindi **non fare mai benchmark su una build di debug**. `cargo build --release` usa `opt-level = 3`, e qualche altra impostazione nel `Cargo.toml` ti permette di scambiare tempo di compilazione con dimensione o velocità:
+
+<ProfileTuner />
+
+Qualche nota pratica:
+
+- `lto = "thin"` è un buon default per le build di produzione; `"fat"` insieme a `codegen-units = 1` spreme gli ultimi punti percentuali per un rilascio finale, con un grosso costo in tempo di compilazione.
+- `debug = false` è già il default in release. Se vuoi i nomi dei simboli nei profiler, imposta `debug = "line-tables-only"` invece di attivare le informazioni di debug complete.
+- `-C target-cpu=native` (tramite `RUSTFLAGS` o `.cargo/config.toml`) permette a LLVM di usare tutte le istruzioni supportate dalla tua CPU, come AVX2. Ottimo per software che gira sulle tue macchine, sbagliato per binari che distribuisci.
+- I profili si possono sovrascrivere per singola dipendenza: `[profile.dev.package."*"] opt-level = 2` mantiene veloce la compilazione del tuo codice rendendo utilizzabili le build di debug delle dipendenze pesanti.
+
+## Attenzione alle allocazioni
+
+Dopo le impostazioni di build, il problema di prestazioni più comune nei programmi Rust non è il calcolo ma l'**allocazione**: le allocazioni sullo heap passano dall'allocatore globale, possono prendere un lock e sparpagliano i dati in memoria. Il linguaggio le rende visibili (`Vec::new`, `String::from`, `Box::new`, `.clone()`, `.to_string()`, `format!`), quindi sono facili da trovare.
+
+<Playground title="Dimensionare le collezioni in anticipo">
+```rust
+fn main() {
+    // Crescere da vuoto: il buffer viene riallocato (e copiato) più volte.
+    let mut grown = Vec::new();
+    let mut reallocations = 0;
+    let mut capacity = grown.capacity();
+    for i in 0..10_000 {
+        grown.push(i);
+        if grown.capacity() != capacity {
+            reallocations += 1;
+            capacity = grown.capacity();
+        }
+    }
+    println!("Vec::new():           {reallocations} riallocazioni, capacità {}", grown.capacity());
+
+    // Dimensionare subito: una sola allocazione, il buffer non si sposta mai.
+    let mut sized = Vec::with_capacity(10_000);
+    let start = sized.as_ptr();
+    for i in 0..10_000 {
+        sized.push(i);
+    }
+    println!("Vec::with_capacity(): buffer spostato = {}", start != sized.as_ptr());
+
+    // Lo stesso vale per le stringhe e per collect() da un iteratore di dimensione esatta.
+    let squares: Vec<u64> = (0..10_000u64).map(|x| x * x).collect();
+    println!("capacità con collect(): {}", squares.capacity());
+}
+```
+</Playground>
+
+Abitudini che ripagano:
+
+- **Dimensiona in anticipo** con `Vec::with_capacity`, `String::with_capacity` o `reserve` quando conosci il numero di elementi. `collect()` lo fa per te quando l'iteratore dichiara una dimensione esatta.
+- **Prendi in prestito invece di clonare.** Accetta `&str` e `&[T]` come parametri invece di `String` e `Vec<T>`. Un `.clone()` aggiunto per far tacere il borrow checker è la prima cosa da guardare in un percorso critico.
+- **Riusa i buffer** tra un'iterazione e l'altra con `clear()`, che mantiene la capacità.
+- **Alloca solo quando serve** con `Cow`, uno smart pointer "clone on write" che contiene un prestito oppure un valore posseduto:
+
+<Playground title="Cow: prestito quando possibile, allocazione quando necessario">
+```rust
+use std::borrow::Cow;
+
+/// Sostituisce i tab con quattro spazi, allocando solo se c'è un tab.
+fn normalize(input: &str) -> Cow<'_, str> {
+    if input.contains('\t') {
+        Cow::Owned(input.replace('\t', "    "))
+    } else {
+        Cow::Borrowed(input)
+    }
+}
+
+fn main() {
+    for line in ["nessun tab qui", "chiave:\tvalore", "di nuovo testo semplice"] {
+        match normalize(line) {
+            Cow::Borrowed(s) => println!("in prestito {s:?}"),
+            Cow::Owned(s) => println!("allocata    {s:?}"),
+        }
+    }
+}
+```
+</Playground>
+
+Per tante collezioni piccole, crate come **smallvec** e **arrayvec** tengono i primi N elementi in linea sullo stack e passano allo heap solo quando crescono oltre.
+
+<Callout type="compare" from="Java / Go">
+Con un GC generazionale, le allocazioni di breve durata costano pochissimo al momento e il costo si manifesta dopo, come lavoro di raccolta. In Rust ogni allocazione è una chiamata a `malloc` e ogni drop una chiamata a `free`, senza un collector in background. Nessuno dei due modelli è più veloce in assoluto, ma in Rust i costi sono locali e prevedibili: una funzione che non alloca non causa mai una pausa da qualche altra parte.
+</Callout>
+
+## Inlining e dispatch
+
+L'inlining è ciò che rende gratuite le astrazioni, e all'interno di un crate LLVM lo decide automaticamente. Tra crate diversi, le funzioni generiche sono sempre disponibili per l'inlining (vengono istanziate nel tuo crate), quelle non generiche no, a meno che non sia attiva la LTO o la funzione sia marcata `#[inline]`. Gli autori di librerie mettono `#[inline]` su funzioni pubbliche piccole, critiche e non generiche; il codice applicativo ne ha bisogno di rado, e `#[inline(always)]` è un'ultima risorsa che spesso peggiora le cose gonfiando il codice.
+
+Allo stesso modo, preferisci i generici (`impl Trait`) nei percorsi critici, così le chiamate si possono mettere inline, e usa `dyn Trait` dove flessibilità, tempo di compilazione o dimensione del codice contano più di qualche nanosecondo a chiamata.
+
+## Misura, non indovinare
+
+Rust ti dà il controllo, e questo rende allettante ottimizzare a intuito. Resisti:
+
+```sh
+cargo install flamegraph
+cargo flamegraph --bin server     # profilo a campionamento, reso come flame graph SVG
+perf record -g ./target/release/server && perf report   # Linux
+```
+
+Su macOS, Instruments e `samply` servono allo stesso scopo. Per i micro-benchmark usa **criterion** (o il `#[bench]` integrato su nightly): fa il riscaldamento, esegue molte iterazioni, applica la statistica e ti dice se un cambiamento è reale o rumore.
+
+```rust
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+fn bench(c: &mut Criterion) {
+    let data: Vec<u32> = (0..100_000).collect();
+    c.bench_function("sum_iter", |b| b.iter(|| sum_iter(black_box(&data))));
+}
+criterion_group!(benches, bench);
+criterion_main!(benches);
+```
+
+`std::hint::black_box` nasconde un valore all'ottimizzatore, così non può calcolare il risultato in compilazione né eliminare il lavoro perché inutilizzato. Per vedere cosa ha prodotto davvero il compilatore, `cargo asm` (da `cargo-show-asm`) o Compiler Explorer (godbolt.org) mostrano l'assembly di una singola funzione.
+
+<Callout type="tip" title="Anche il tempo di compilazione è prestazione">
+Per chi sviluppa, la parte più lenta di Rust è spesso la build. `cargo check` per un feedback rapido, `cargo build --timings` per trovare i crate lenti, meno dipendenze pesanti basate su macro procedurali, la divisione di un crate grande in un workspace così la generazione del codice gira in parallelo, e un linker più veloce (mold o lld) sono i rimedi abituali.
+</Callout>
+
+## Punti chiave
+
+- Iteratori, closure e generici compilano nello stesso codice dei cicli scritti a mano; il costo si sposta su tempo di compilazione e dimensione del binario.
+- Misura sempre build di release; regola `opt-level`, `lto`, `codegen-units`, `panic` e `strip` in `[profile.release]` a seconda che ti interessi velocità, dimensione o tempo di build.
+- I controlli sui limiti costano poco e spesso vengono eliminati; iteratori e asserzioni iniziali aiutano l'ottimizzatore a toglierli.
+- L'allocazione è il punto critico più frequente: dimensiona le collezioni in anticipo, prendi in prestito invece di clonare, riusa i buffer, usa `Cow`.
+- Preferisci il dispatch statico nei percorsi critici; usa `#[inline]` con parsimonia, soprattutto nelle librerie.
+- Fai profiling con i flame graph e benchmark con criterion e `black_box` prima e dopo ogni ottimizzazione.

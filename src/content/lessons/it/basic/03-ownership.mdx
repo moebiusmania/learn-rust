@@ -1,0 +1,195 @@
+---
+title: Ownership e move
+description: Come Rust libera la memoria senza garbage collector, cosa copia davvero un move e quando i valori vengono rilasciati.
+duration: 25
+tags: [ownership, move, Copy, Clone, Drop, stack e heap]
+---
+
+Ogni linguaggio deve rispondere a una domanda: *quando si può liberare questa memoria?* C e C++ lasciano la risposta a te, e ottieni leak, double free e bug di use-after-free. Java, Go, Python e JavaScript la affidano a un garbage collector, e paghi con pause, maggiore consumo di memoria e nessun controllo su quando avviene la pulizia. Rust segue una terza strada: **ogni valore ha esattamente un proprietario, e il valore viene liberato quando il suo proprietario esce dallo scope**. È il compilatore a verificare le regole, quindi il costo a runtime è zero.
+
+Questa lezione è il cuore del linguaggio. Prenditi il tempo che serve con il visualizzatore.
+
+## Stack, heap e com'è fatta una String
+
+La distinzione la conosci già; ecco come Rust ci mappa sopra i tipi. I valori la cui dimensione è nota in compilazione (interi, float, `bool`, `char`, array, tuple e struct composte da questi) vivono inline: sullo stack, per le variabili locali. I dati la cui dimensione si conosce solo a runtime vivono sullo heap, dietro un piccolo handle di dimensione fissa.
+
+Una `String` è proprio un handle di questo tipo: una struct da 24 byte (sui target a 64 bit) con un **puntatore** a un buffer sullo heap, una **lunghezza** e una **capacità**. Un letterale come `"hello"` è diverso: i suoi byte sono incisi nei dati di sola lettura del binario, e ottieni un `&'static str`, una vista in prestito che vive per tutta la durata del programma.
+
+```rust
+let literal: &str = "hello";              // punta dentro il binario, nessuna allocazione
+let owned: String = String::from("hello"); // alloca 5 byte sullo heap
+let size = std::mem::size_of::<String>();  // 24: ptr + len + cap
+```
+
+## Le regole
+
+1. Ogni valore ha un unico **proprietario** (owner), una variabile o un campo.
+2. L'ownership può essere **spostata** (move) a un altro proprietario; quello precedente diventa inutilizzabile.
+3. Quando il proprietario esce dallo scope, il valore viene **rilasciato** (drop): il suo distruttore viene eseguito e la memoria sullo heap liberata.
+
+Tutto qui. Tutto il resto (borrowing, lifetime, smart pointer) si costruisce su queste tre regole.
+
+## I move
+
+Assegnare a un'altra variabile un valore che possiede memoria sullo heap, passarlo a una funzione o restituirlo lo **sposta**. Viene copiato, bit per bit, solo il piccolo handle sullo stack; i dati sullo heap restano dove sono. Quello che cambia è *chi ha la responsabilità di liberarli*.
+
+<OwnershipVisualizer />
+
+Il punto chiave è il passo 2. Dopo `let s2 = s1`, entrambi gli handle punterebbero allo stesso buffer. Se fossero validi tutti e due, alla fine di `main` lo libererebbero entrambi: un double free. Rust lo impedisce dichiarando `s1` morta da quel punto in poi.
+
+<Playground title="Uso dopo un move" expectError>
+```rust
+fn main() {
+    let s1 = String::from("hello");
+    let s2 = s1;
+    println!("{s1}, world");
+    println!("{s2}");
+}
+```
+</Playground>
+
+L'errore, `borrow of moved value: s1`, indica sia il move sia l'uso successivo. Suggerisce persino `.clone()`. Il controllo è puramente statico: a runtime non c'è nessun flag "spostato" da verificare e nessun null lasciato indietro.
+
+<Compare left="Python">
+```python
+a = ["hello"]
+b = a            # due nomi, una sola lista
+b.append("world")
+print(a)         # ['hello', 'world']: aliasing
+# il GC libera la lista quando nessun nome la riferisce
+```
+
+```rust
+let a = vec!["hello"];
+let mut b = a;   // l'ownership passa a b
+b.push("world");
+// println!("{a:?}"); // errore: a è stato spostato
+// il Vec viene liberato quando b esce dallo scope
+```
+</Compare>
+
+Nei linguaggi con garbage collector l'assegnazione crea un **alias**: due nomi per lo stesso oggetto, ciascuno dei quali può modificarlo. La semantica di move di Rust fa sì che non ci sia mai aliasing silenzioso dei dati posseduti. Quando vuoi davvero che due nomi vedano gli stessi dati, lo dichiari esplicitamente con un borrow (prossima lezione) o con un puntatore condiviso come `Rc` (percorso intermedio).
+
+<Callout type="compare" from="C++">
+Un move in Rust è come uno `std::move` dentro un `unique_ptr`, con due differenze. È il comportamento **di default**, non una scelta esplicita. E la sorgente non resta in uno stato "valido ma non specificato" che puoi ancora toccare: il compilatore vieta qualsiasi uso successivo, quindi non esiste proprio uno stato moved-from su cui ragionare.
+</Callout>
+
+## Copy e Clone
+
+Spostare un `i32` non avrebbe senso: non c'è niente sullo heap da proteggere. I tipi che sono semplici bit implementano il trait `Copy`, e per loro l'assegnazione duplica il valore lasciando utilizzabile l'originale.
+
+Sono `Copy` tutti gli interi e i float, `bool`, `char`, i riferimenti condivisi `&T`, e le tuple o gli array i cui elementi sono tutti `Copy`. Un tipo che possiede una risorsa (`String`, `Vec`, `Box`, un file aperto) non può mai essere `Copy`.
+
+Per tutto il resto c'è `Clone`: una chiamata esplicita a `.clone()` che può allocare e copiare quanto serve.
+
+<Playground title="Copy e Clone">
+```rust
+#[derive(Debug, Clone, Copy)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Debug, Clone)]
+struct User {
+    name: String, // possiede dati sullo heap: non può essere Copy
+    age: u32,
+}
+
+fn main() {
+    let p1 = Point { x: 1, y: 2 };
+    let p2 = p1;              // copia bit a bit, p1 resta valido
+    println!("{p1:?} {p2:?} x+y={}", p1.x + p1.y);
+
+    let u1 = User { name: String::from("Ada"), age: 36 };
+    let mut u2 = u1.clone();  // copia profonda: un nuovo buffer per il nome
+    u2.name.push_str(" Lovelace");
+    u2.age += 1;
+    println!("{u1:?}\n{u2:?}");
+}
+```
+</Playground>
+
+Prova a togliere `Clone, Copy` dal derive di `Point`: `p1` viene spostato in `p2` e stampare `p1` fallisce. Poi prova ad aggiungere `Copy` a `User`: il compilatore rifiuta, perché `String` non è `Copy`.
+
+<Callout type="tip">
+Vedere `.clone()` in una code review è un segnale utile: indica esattamente dove i dati vengono duplicati. Clonare va benissimo nel codice non critico e mentre impari, ma tanti clone fatti per "accontentare il borrow checker" di solito significano che un borrow sarebbe la scelta migliore.
+</Callout>
+
+## Ownership tra funzioni
+
+I parametri di una funzione sono semplicemente binding, quindi passare un valore lo **sposta** dentro la funzione, e restituire un valore lo **sposta** fuori, al chiamante.
+
+<Playground title="Move dentro e fuori dalle funzioni">
+```rust
+fn take(s: String) {
+    println!("preso {s}");
+} // qui s viene rilasciata: il buffer è liberato
+
+fn make_greeting(name: &str) -> String {
+    let mut s = String::from("Ciao, ");
+    s.push_str(name);
+    s // l'ownership passa al chiamante
+}
+
+fn add_suffix(mut s: String) -> String {
+    s.push('!');
+    s
+}
+
+fn main() {
+    let a = make_greeting("Rust");
+    let a = add_suffix(a);   // dentro e poi di nuovo fuori
+    take(a);                 // dentro, definitivamente
+    // println!("{a}");      // errore: a è stato spostato in take()
+
+    let n = 5;
+    let m = n;               // i32 è Copy
+    println!("{n} {m}");
+}
+```
+</Playground>
+
+Passare l'ownership avanti e indietro funziona, ma diventa noioso: immagina se ogni funzione che deve solo leggere una stringa dovesse restituirla. È esattamente il problema che risolvono i riferimenti, nella prossima lezione. Nota anche `make_greeting(name: &str)`: prende in prestito l'input e restituisce una nuova `String` posseduta, una forma di firma molto comune.
+
+## Drop: pulizia deterministica
+
+Quando un proprietario esce dallo scope, Rust chiama `drop` sul valore. Per `String` e `Vec` questo libera il buffer sullo heap. Per un `File` chiude il descrittore. Per un `MutexGuard` sblocca il mutex. È il **RAII** del C++, ma imposto dalle regole di ownership in modo che ogni risorsa venga rilasciata esattamente una volta.
+
+<Playground title="Ordine dei drop">
+```rust
+struct Noisy(&'static str);
+
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+fn main() {
+    let _a = Noisy("a");
+    let _b = Noisy("b");
+    {
+        let _inner = Noisy("inner");
+        println!("esco dallo scope interno");
+    }
+    let c = Noisy("c");
+    drop(c); // std::mem::drop: prende l'ownership e lo rilascia subito
+    println!("fine di main");
+}
+```
+</Playground>
+
+Le variabili locali vengono rilasciate in **ordine inverso rispetto alla dichiarazione**, così i valori dichiarati dopo, che possono dipendere da quelli precedenti, se ne vanno per primi. Chiamare `drop(c)` non è una sintassi speciale: `std::mem::drop` è una funzione vuota che prende l'ownership, quindi il valore viene rilasciato quando quella funzione ritorna.
+
+<Callout type="runtime">
+Il compilatore inserisce le chiamate a drop durante la costruzione della MIR, in ogni punto in cui un valore posseduto esce dallo scope, compresi i `return` anticipati, il `?` e i panic che srotolano lo stack. Quando un valore viene spostato solo *in certi casi* (per esempio dentro un `if`), il compilatore aggiunge sullo stack un booleano nascosto, il **drop flag**, e lo controlla alla fine dello scope. Questo è l'intero costo a runtime dell'ownership: di solito niente, a volte un byte e un salto condizionale.
+</Callout>
+
+## Punti chiave
+
+- Ogni valore ha esattamente un proprietario; quando il proprietario esce dallo scope il valore viene rilasciato.
+- Assegnazione, passaggio di argomenti e return **spostano** i valori che possiedono risorse: viene copiato solo l'handle sullo stack e la sorgente diventa inutilizzabile.
+- I tipi `Copy` (semplici bit come gli interi e `&T`) vengono duplicati invece che spostati; tutto il resto va clonato esplicitamente con `.clone()`.
+- L'uso dopo un move è un errore di compilazione, non un controllo a runtime, e non esiste uno stato moved-from.
+- Il drop è RAII deterministico: le risorse vengono rilasciate in ordine inverso di dichiarazione, esattamente una volta.

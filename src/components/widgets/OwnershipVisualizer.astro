@@ -1,0 +1,230 @@
+---
+/**
+ * Ownership stepper: a code listing on one side, stack frames and heap
+ * buffers (SVG) on the other. Each step highlights a line and redraws who
+ * owns which allocation.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+import { highlightRustLines } from '@/scripts/rust-highlight';
+
+interface Strings {
+  title: string; subtitle: string; prev: string; next: string; reset: string;
+  stack: string; heap: string; moved: string; freed: string; steps: string[];
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'ownership-visualizer');
+
+const code = `fn main() {
+    let s1 = String::from("hello");
+    let s2 = s1;
+    // println!("{s1}"); // error[E0382]
+    let s3 = s2.clone();
+    takes(s3);
+    println!("{s2}");
+} // s2 dropped here
+
+fn takes(s: String) {
+    println!("{s}");
+} // s dropped here`;
+const lines = highlightRustLines(code);
+
+type Var = { name: string; heap?: string; moved?: boolean; error?: boolean };
+type Frame = { fn: string; vars: Var[]; leaving?: boolean };
+type Heap = { id: string; text: string; freed?: boolean };
+type Step = { line: number; error?: boolean; frames: Frame[]; heap: Heap[] };
+
+const A = { id: 'A', text: 'hello' };
+const B = { id: 'B', text: 'hello' };
+const steps: Step[] = [
+  { line: 1, frames: [{ fn: 'main', vars: [{ name: 's1', heap: 'A' }] }], heap: [A] },
+  { line: 2, frames: [{ fn: 'main', vars: [{ name: 's1', moved: true }, { name: 's2', heap: 'A' }] }], heap: [A] },
+  { line: 3, error: true, frames: [{ fn: 'main', vars: [{ name: 's1', moved: true, error: true }, { name: 's2', heap: 'A' }] }], heap: [A] },
+  { line: 4, frames: [{ fn: 'main', vars: [{ name: 's1', moved: true }, { name: 's2', heap: 'A' }, { name: 's3', heap: 'B' }] }], heap: [A, B] },
+  {
+    line: 9,
+    frames: [
+      { fn: 'main', vars: [{ name: 's1', moved: true }, { name: 's2', heap: 'A' }, { name: 's3', moved: true }] },
+      { fn: 'takes', vars: [{ name: 's', heap: 'B' }] },
+    ],
+    heap: [A, B],
+  },
+  {
+    line: 11,
+    frames: [
+      { fn: 'main', vars: [{ name: 's1', moved: true }, { name: 's2', heap: 'A' }, { name: 's3', moved: true }] },
+      { fn: 'takes', vars: [{ name: 's' }], leaving: true },
+    ],
+    heap: [A, { ...B, freed: true }],
+  },
+  { line: 6, frames: [{ fn: 'main', vars: [{ name: 's1', moved: true }, { name: 's2', heap: 'A' }, { name: 's3', moved: true }] }], heap: [A] },
+  {
+    line: 7,
+    frames: [{ fn: 'main', vars: [{ name: 's1', moved: true }, { name: 's2' }, { name: 's3', moved: true }], leaving: true }],
+    heap: [{ ...A, freed: true }],
+  },
+];
+---
+<WidgetFrame
+  tag="ownership-visualizer"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="memory"
+  data-steps={JSON.stringify(steps)}
+  data-labels={JSON.stringify({ stack: s.stack, heap: s.heap, moved: s.moved, freed: s.freed })}
+>
+  <div class="ov-grid">
+    <pre class="code-lines" aria-label="code">{lines.map((l, i) => <span class="ln" data-line={i} set:html={l} />)}</pre>
+    <svg class="ov-mem" viewBox="0 0 520 290" role="img" aria-label={`${s.stack} / ${s.heap}`}></svg>
+  </div>
+  <div class="widget-caption" aria-live="polite">
+    {s.steps.map((text, i) => <p data-caption={i} hidden={i !== 0} set:html={text} />)}
+  </div>
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm btn-ghost" data-prev><Icon name="prev" size={14} />{s.prev}</button>
+    <button type="button" class="btn btn-sm" data-next>{s.next}<Icon name="next" size={14} /></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-reset><Icon name="reset" size={14} />{s.reset}</button>
+    <div class="steps-dots" aria-hidden="true">{steps.map(() => <span />)}</div>
+  </div>
+</WidgetFrame>
+
+<script>
+  type Var = { name: string; heap?: string; moved?: boolean; error?: boolean };
+  type Frame = { fn: string; vars: Var[]; leaving?: boolean };
+  type Heap = { id: string; text: string; freed?: boolean };
+  type Step = { line: number; error?: boolean; frames: Frame[]; heap: Heap[] };
+
+  const HEAP_Y: Record<string, number> = { A: 70, B: 200 };
+
+  class OwnershipVisualizer extends HTMLElement {
+    #i = 0;
+    #steps: Step[] = [];
+    #labels: Record<string, string> = {};
+
+    connectedCallback() {
+      this.#steps = JSON.parse(this.dataset.steps ?? '[]');
+      this.#labels = JSON.parse(this.dataset.labels ?? '{}');
+      this.querySelector('[data-prev]')!.addEventListener('click', () => this.go(this.#i - 1));
+      this.querySelector('[data-next]')!.addEventListener('click', () => this.go(this.#i + 1));
+      this.querySelector('[data-reset]')!.addEventListener('click', () => this.go(0));
+      this.addEventListener('keydown', (e) => {
+        if ((e.target as HTMLElement).closest('button') === null) return;
+        if (e.key === 'ArrowRight') this.go(this.#i + 1);
+        if (e.key === 'ArrowLeft') this.go(this.#i - 1);
+      });
+      this.go(0);
+    }
+
+    go(i: number) {
+      const n = this.#steps.length;
+      this.#i = Math.max(0, Math.min(n - 1, i));
+      const step = this.#steps[this.#i]!;
+      this.querySelectorAll<HTMLElement>('.ln').forEach((ln) => {
+        const k = Number(ln.dataset.line);
+        ln.classList.toggle('is-active', k === step.line && !step.error);
+        ln.classList.toggle('is-error', k === step.line && !!step.error);
+      });
+      this.querySelectorAll<HTMLElement>('[data-caption]').forEach((p) => (p.hidden = Number(p.dataset.caption) !== this.#i));
+      this.querySelectorAll('.steps-dots span').forEach((d, k) => d.classList.toggle('on', k === this.#i));
+      (this.querySelector('[data-prev]') as HTMLButtonElement).disabled = this.#i === 0;
+      (this.querySelector('[data-next]') as HTMLButtonElement).disabled = this.#i === n - 1;
+      this.draw(step);
+    }
+
+    draw(step: Step) {
+      const L = this.#labels;
+      const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      let out = `<text class="col" x="12" y="22">${L.stack}</text><text class="col heap" x="300" y="22">${L.heap}</text>`;
+      const anchors: Record<string, { x: number; y: number }[]> = {};
+      let y = 38;
+      step.frames.forEach((f) => {
+        const h = 30 + f.vars.length * 30;
+        out += `<g class="frame${f.leaving ? ' leaving' : ''}">
+          <rect class="frame-box" x="12" y="${y}" width="210" height="${h}" rx="10"/>
+          <text class="fn" x="26" y="${y + 20}">${esc(f.fn)}()</text>`;
+        f.vars.forEach((v, k) => {
+          const vy = y + 30 + k * 30;
+          const state = v.moved ? 'moved' : v.heap ? 'owner' : 'empty';
+          out += `<g class="var ${state}${v.error ? ' error' : ''}">
+            <rect x="20" y="${vy}" width="194" height="26" rx="6"/>
+            <text class="vname" x="30" y="${vy + 17}">${esc(v.name)}</text>
+            <text class="vtype" x="${v.moved ? 130 : 150}" y="${vy + 17}" text-anchor="end">String</text>
+            ${v.moved ? `<text class="vtag" x="206" y="${vy + 17}" text-anchor="end">${L.moved}</text>` : ''}
+            ${v.heap ? `<circle class="dot" cx="206" cy="${vy + 13}" r="4"/>` : ''}
+          </g>`;
+          if (v.heap) (anchors[v.heap] ??= []).push({ x: 206, y: vy + 13 });
+        });
+        out += `</g>`;
+        y += h + 14;
+      });
+
+      step.heap.forEach((b) => {
+        const by = HEAP_Y[b.id] ?? 70;
+        out += `<g class="buf${b.freed ? ' freed' : ''}">
+          <rect class="buf-box" x="300" y="${by}" width="200" height="50" rx="10"/>`;
+        [...b.text].forEach((ch, k) => {
+          out += `<rect class="byte" x="${312 + k * 36}" y="${by + 10}" width="30" height="30" rx="6"/>
+            <text class="byte-t" x="${327 + k * 36}" y="${by + 30}" text-anchor="middle">${ch}</text>`;
+        });
+        if (b.freed) out += `<text class="freed-t" x="400" y="${by + 70}" text-anchor="middle">${L.freed}</text>`;
+        out += `</g>`;
+        (anchors[b.id] ?? []).forEach((a) => {
+          if (b.freed) return;
+          const tx = 300;
+          const ty = by + 25;
+          const mx = (a.x + tx) / 2;
+          out += `<path class="arrow" d="M${a.x} ${a.y} C ${mx} ${a.y}, ${mx} ${ty}, ${tx - 4} ${ty}" marker-end="url(#ov-arrow)"/>`;
+        });
+      });
+
+      const svg = this.querySelector('svg.ov-mem')!;
+      svg.innerHTML = `<defs><marker id="ov-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="var(--owner)"/></marker></defs>${out}`;
+    }
+  }
+  customElements.define('ownership-visualizer', OwnershipVisualizer);
+</script>
+
+<style>
+  ownership-visualizer { display: block; }
+  .ov-grid {
+    display: grid; gap: var(--space-4); align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @container widget (width >= 60rem) {
+    .ov-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+  }
+  .code-lines { font-size: 0.78rem; }
+  .ov-mem { inline-size: 100%; max-inline-size: 36rem; justify-self: center; block-size: auto; font-family: var(--font-mono); overflow: visible; }
+  .ov-mem :global(.col) { font: 700 11px var(--font-sans); letter-spacing: 0.16em; fill: var(--stack); }
+  .ov-mem :global(.col.heap) { fill: var(--heap); }
+  .ov-mem :global(.frame) { animation: ov-in 380ms var(--ease-out) both; }
+  .ov-mem :global(.frame.leaving) { opacity: 0.55; }
+  .ov-mem :global(.frame.leaving .frame-box) { stroke-dasharray: 5 4; }
+  .ov-mem :global(.frame-box) { fill: color-mix(in oklch, var(--stack) 6%, var(--surface)); stroke: color-mix(in oklch, var(--stack) 45%, var(--border)); }
+  .ov-mem :global(.fn) { font-size: 12px; font-weight: 700; fill: var(--stack); }
+  .ov-mem :global(.var rect) { fill: var(--surface); stroke: var(--border); }
+  .ov-mem :global(.vname) { font-size: 13px; font-weight: 700; fill: var(--text); }
+  .ov-mem :global(.vtype) { font-size: 11px; fill: var(--text-faint); }
+  .ov-mem :global(.var.owner rect) { stroke: var(--owner); }
+  .ov-mem :global(.dot) { fill: var(--owner); }
+  .ov-mem :global(.var.moved .vname) { fill: var(--text-faint); text-decoration: line-through; }
+  .ov-mem :global(.vtag) { font: 600 10px var(--font-sans); fill: var(--invalid); }
+  .ov-mem :global(.var.error rect) {
+    stroke: var(--invalid); stroke-width: 2; fill: color-mix(in oklch, var(--invalid) 12%, var(--surface));
+    animation: ov-shake 420ms ease;
+  }
+  .ov-mem :global(.buf) { animation: ov-in 420ms var(--ease-out) both; transition: opacity var(--dur); }
+  .ov-mem :global(.buf-box) { fill: color-mix(in oklch, var(--heap) 10%, var(--surface)); stroke: color-mix(in oklch, var(--heap) 55%, transparent); }
+  .ov-mem :global(.byte) { fill: var(--surface); stroke: color-mix(in oklch, var(--heap) 45%, transparent); }
+  .ov-mem :global(.byte-t) { font-size: 14px; font-weight: 600; fill: var(--heap); }
+  .ov-mem :global(.buf.freed) { opacity: 0.4; }
+  .ov-mem :global(.buf.freed .buf-box) { stroke-dasharray: 5 4; fill: transparent; }
+  .ov-mem :global(.freed-t) { font: 600 11px var(--font-sans); fill: var(--invalid); }
+  .ov-mem :global(.arrow) {
+    fill: none; stroke: var(--owner); stroke-width: 2.2; stroke-linecap: round;
+    stroke-dasharray: 400; animation: ov-draw 600ms var(--ease-out) both;
+  }
+  @keyframes ov-in { from { opacity: 0; translate: 0 6px; } }
+  @keyframes ov-draw { from { stroke-dashoffset: 400; } to { stroke-dashoffset: 0; } }
+  @keyframes ov-shake { 25% { translate: -3px 0; } 75% { translate: 3px 0; } }
+</style>

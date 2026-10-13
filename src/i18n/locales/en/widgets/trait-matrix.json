@@ -1,0 +1,24 @@
+{
+  "title": "Who may implement what?",
+  "subtitle": "The orphan rule: click any cell",
+  "local": "local",
+  "foreign": "std",
+  "allowed": "Allowed",
+  "rejected": "Rejected · E0117",
+  "corner": "type ↓ · trait →",
+  "intro": "Each cell is an <code>impl Trait for Type</code> written in <strong>your</strong> crate. Select one to see why the compiler accepts or rejects it.",
+  "cells": {
+    "point-describe": "Both the trait and the type are yours. Anything goes.",
+    "point-display": "The trait is foreign but <code>Point</code> is local, so your crate is the only place this impl can ever live. This is how you make your own types printable with <code>{}</code>.",
+    "point-iterator": "Allowed for the same reason: the type is local. You would provide <code>type Item</code> and <code>fn next</code>, and every iterator adapter becomes available on <code>Point</code>.",
+    "i32-describe": "A local trait can be implemented for foreign types. This is the <strong>extension trait</strong> pattern: you add methods to <code>i32</code>, visible wherever your trait is in scope.",
+    "i32-display": "Both <code>Display</code> and <code>i32</code> belong to std, which already has this impl. If your crate could add one, two crates could add conflicting ones: coherence forbids it.",
+    "i32-iterator": "Foreign trait, foreign type. Only std could write this impl. Wrap the value in a newtype (<code>struct Counter(i32);</code>) to implement it yourself.",
+    "vecT-describe": "A <strong>blanket impl</strong> over a foreign generic type is fine when the trait is local: <code>impl&lt;T&gt; Describe for Vec&lt;T&gt;</code>.",
+    "vecT-display": "<code>Vec</code> and <code>Display</code> are both foreign. std deliberately leaves this out because there is no single right way to display a list.",
+    "vecT-iterator": "Foreign trait, foreign type. Note that <code>Vec</code> is not an iterator itself, it implements <code>IntoIterator</code> instead.",
+    "vecPoint-describe": "Local trait: allowed, and more specific than a blanket impl over <code>Vec&lt;T&gt;</code> (you cannot have both, they would overlap).",
+    "vecPoint-display": "Surprising but rejected: a local type <em>inside</em> a foreign one does not make <code>Vec&lt;Point&gt;</code> local. Use a newtype: <code>struct Points(Vec&lt;Point&gt;);</code>",
+    "vecPoint-iterator": "Rejected for the same reason. A newtype around the vector is again the escape hatch."
+  }
+}

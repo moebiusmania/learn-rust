@@ -1,0 +1,14 @@
+{
+  "title": "Intermedio",
+  "tagline": "Astrazioni senza overhead",
+  "summary": "Trait, generici, lifetime, closure, iteratori, smart pointer e l'ecosistema Cargo: come è strutturato il Rust idiomatico.",
+  "intro": "Una volta capita l'ownership, il passo successivo è imparare come Rust costruisce le astrazioni. I trait sostituiscono l'ereditarietà, i generici si risolvono in compilazione, i lifetime descrivono come i riferimenti sono legati tra loro e gli iteratori trasformano i cicli in pipeline componibili che compilano comunque in codice macchina compatto.",
+  "concepts": [
+    { "title": "Trait, non ereditarietà", "text": "Il comportamento si condivide tramite trait implementati per i tipi, anche per tipi che non hai scritto tu. Non esistono classi né gerarchie di sottotipi." },
+    { "title": "Monomorfizzazione", "text": "Il codice generico viene copiato e specializzato per ogni tipo concreto in fase di compilazione. Costa in dimensione del binario, non in velocità." },
+    { "title": "Dispatch statico e dinamico", "text": "impl Trait e i generici usano il dispatch statico; dyn Trait usa un fat pointer con una vtable. La scelta è esplicita, punto per punto." },
+    { "title": "I lifetime sono vincoli", "text": "Un'annotazione di lifetime non cambia quanto vive qualcosa. Dice al compilatore come è legata la validità dei riferimenti, così può verificarli." },
+    { "title": "Iteratori pigri", "text": "Gli adattatori degli iteratori non fanno nulla finché non vengono consumati. L'intera catena viene fusa e messa inline dall'ottimizzatore in un unico ciclo." },
+    { "title": "Condivisione su richiesta", "text": "Ownership condivisa (Rc, Arc) e mutabilità interna (RefCell, Mutex) esistono, ma sono tipi di libreria che scegli esplicitamente, con costi visibili." }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "site": {
+    "title": "Rust, for developers",
+    "shortTitle": "Rust for Devs",
+    "description": "An interactive Rust course for developers who already know how to program. Three tracks: basic, intermediate and advanced."
+  },
+  "nav": {
+    "skipToContent": "Skip to content",
+    "home": "Home",
+    "tracks": "Tracks",
+    "language": "Language",
+    "theme": "Theme",
+    "themeAuto": "System",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "menu": "Menu",
+    "prev": "Previous",
+    "next": "Next",
+    "backToTrack": "Back to track",
+    "lessons": "Lessons",
+    "onThisPage": "On this page",
+    "nextTrack": "Continue with the next track"
+  },
+  "home": {
+    "eyebrow": "An interactive course",
+    "heroTitle": "Learn Rust the way you learned your second language: by comparison.",
+    "heroLead": "You already know loops, closures and generics. This course skips the basics of programming and focuses on what is actually different in Rust: ownership, the borrow checker, the type system and a runtime that is almost nothing at all.",
+    "cta": "Start the basic track",
+    "ctaSecondary": "Browse all tracks",
+    "whyTitle": "What makes Rust different",
+    "why": [
+      { "title": "No garbage collector", "text": "Memory is freed deterministically when its owner goes out of scope. No pauses, no finalizers, no reference counting unless you ask for it." },
+      { "title": "Checked at compile time", "text": "Data races, use-after-free and null dereferences are rejected by the compiler, not discovered in production." },
+      { "title": "Zero-cost abstractions", "text": "Iterators, generics and closures compile down to the same machine code you would write by hand." },
+      { "title": "Errors are values", "text": "No exceptions. Failure is part of the function signature through Result and Option." }
+    ],
+    "tracksTitle": "Three tracks",
+    "tracksLead": "Each track mixes concept explanations, diagrams and runnable examples. Every code block marked as a playground can be edited and executed in your browser.",
+    "lessonsCount": "{count} lessons",
+    "minutes": "~{count} min",
+    "startTrack": "Open track",
+    "howTitle": "How the examples work",
+    "howText": "Editable playgrounds are compiled and run on the official Rust Playground (play.rust-lang.org). Visualizations run entirely in your browser."
+  },
+  "track": {
+    "conceptsTitle": "Key concepts",
+    "lessonsTitle": "Lessons",
+    "lessonNumber": "Lesson {n}",
+    "minutes": "{count} min"
+  },
+  "lesson": {
+    "minutes": "{count} min read",
+    "lessonOf": "Lesson {n} of {total}",
+    "comingFrom": "Coming from"
+  },
+  "playground": {
+    "label": "Playground",
+    "run": "Run",
+    "running": "Compiling…",
+    "reset": "Reset",
+    "copy": "Copy",
+    "copied": "Copied",
+    "output": "Output",
+    "noOutput": "(no output)",
+    "compilerOutput": "Compiler",
+    "networkError": "Could not reach the Rust Playground. Check your connection and try again.",
+    "editHint": "Editable: change the code and press Run (Ctrl/⌘ + Enter).",
+    "expectError": "This example is expected not to compile: read the error."
+  },
+  "callout": {
+    "note": "Note",
+    "tip": "Tip",
+    "warn": "Watch out",
+    "runtime": "Under the hood",
+    "compare": "If you come from…"
+  },
+  "footer": {
+    "text": "Made for developers moving to Rust. Code examples run on play.rust-lang.org.",
+    "notAffiliated": "Not affiliated with the Rust Foundation."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "text": "This page does not exist, or it moved.",
+    "back": "Back to the home page"
+  }
+}

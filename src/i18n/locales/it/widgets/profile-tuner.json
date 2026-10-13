@@ -1,0 +1,17 @@
+{
+  "title": "Regolare il profilo release",
+  "subtitle": "Cambia le impostazioni e osserva come si spostano i compromessi",
+  "disclaimer": "Tendenze indicative rispetto al profilo release di default (1,0×), non misurazioni: i numeri reali dipendono molto dal tuo codice e dal target. Barre più corte sono migliori.",
+  "presetsLabel": "Preset",
+  "presets": { "default": "--release di default", "speed": "Massima velocità", "size": "Binario più piccolo" },
+  "metrics": { "compile": "Tempo di compilazione", "size": "Dimensione binario", "runtime": "Tempo di esecuzione" },
+  "baseline": "default",
+  "toml": "Cargo.toml",
+  "knobs": {
+    "opt": { "label": "opt-level", "help": "<code>opt-level</code> sceglie la pipeline di ottimizzazione di LLVM. <code>3</code> è il default in release, <code>s</code>/<code>z</code> ottimizzano per la dimensione (spesso perdendo un po' di velocità), <code>0</code> è quello che usano le build di debug." },
+    "lto": { "label": "lto", "help": "La link-time optimization permette a LLVM di fare inlining ed eliminare codice attraverso i confini dei crate. <code>thin</code> è una variante più economica e parallela; <code>fat</code> fonde tutto in un unico modulo: il risultato più piccolo e veloce, la build più lenta." },
+    "cgu": { "label": "codegen-units", "help": "Il crate viene diviso in unità compilate in parallelo. <code>16</code> compila più in fretta; <code>1</code> dà all'ottimizzatore l'intero crate in un colpo solo, per un codice leggermente migliore." },
+    "panic": { "label": "panic", "help": "<code>abort</code> elimina le tabelle di unwinding e i landing pad: binari più piccoli e un po' meno codice nei percorsi critici, ma i distruttori non vengono più eseguiti in caso di panic e <code>catch_unwind</code> smette di funzionare." },
+    "strip": { "label": "strip", "help": "Rimuove i nomi dei simboli dal binario finale. Grande risparmio di spazio, nessun effetto a runtime, ma stack trace e profiler perdono i nomi delle funzioni, a meno che tu non conservi le informazioni di debug separatamente." }
+  }
+}

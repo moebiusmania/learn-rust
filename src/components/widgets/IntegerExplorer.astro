@@ -1,0 +1,192 @@
+---
+/**
+ * Integer explorer: shows the bit pattern of two operands and of their
+ * wrapped sum, plus the result of wrapping_/checked_/saturating_/overflowing_add.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string; type: string; a: string; b: string; range: string;
+  result: string; sign: string; none: string; fits: string; overflows: string; signedNote: string;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'integer-explorer');
+const types = ['i8', 'u8', 'i16', 'u16', 'i32', 'u32'];
+---
+<WidgetFrame tag="integer-explorer" title={s.title} subtitle={s.subtitle} icon="ruler" data-strings={JSON.stringify(s)}>
+  <div class="ie-controls">
+    <div class="seg" role="group" aria-label={s.type}>
+      {types.map((t) => <button type="button" data-type={t} aria-pressed={t === 'u8' ? 'true' : 'false'}>{t}</button>)}
+    </div>
+    <label class="ie-field"><span>{s.a}</span><input type="number" data-input="a" value="250" /></label>
+    <label class="ie-field"><span>{s.b}</span><input type="number" data-input="b" value="10" /></label>
+    <span class="ie-range" data-range></span>
+  </div>
+  <div class="ie-bits-wrap"><svg class="ie-bits" data-bits role="img" aria-label="bits"></svg></div>
+  <div class="ie-results" data-results></div>
+  <div class="widget-caption" data-caption aria-live="polite"></div>
+</WidgetFrame>
+
+<script>
+  type Strings = Record<string, string>;
+
+  const BITS: Record<string, number> = { i8: 8, u8: 8, i16: 16, u16: 16, i32: 32, u32: 32 };
+
+  class IntegerExplorer extends HTMLElement {
+    #type = 'u8';
+    #s: Strings = {};
+
+    connectedCallback() {
+      this.#s = JSON.parse(this.dataset.strings ?? '{}');
+      this.querySelectorAll<HTMLButtonElement>('[data-type]').forEach((b) =>
+        b.addEventListener('click', () => {
+          this.#type = b.dataset.type!;
+          this.querySelectorAll('[data-type]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          this.update();
+        }),
+      );
+      this.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => this.update()));
+      this.querySelectorAll('input').forEach((i) => i.addEventListener('change', () => this.update(true)));
+      this.update();
+    }
+
+    range() {
+      const n = BigInt(BITS[this.#type]!);
+      const signed = this.#type.startsWith('i');
+      const min = signed ? -(1n << (n - 1n)) : 0n;
+      const max = signed ? (1n << (n - 1n)) - 1n : (1n << n) - 1n;
+      return { n: Number(n), signed, min, max, mod: 1n << n };
+    }
+
+    read(name: string, r: ReturnType<IntegerExplorer['range']>, normalize: boolean) {
+      const input = this.querySelector<HTMLInputElement>(`[data-input="${name}"]`)!;
+      input.min = String(r.min);
+      input.max = String(r.max);
+      let v: bigint;
+      try { v = BigInt(Math.trunc(Number(input.value) || 0)); } catch { v = 0n; }
+      const clamped = v < r.min ? r.min : v > r.max ? r.max : v;
+      if (normalize || clamped !== v) input.value = String(clamped);
+      return clamped;
+    }
+
+    update(normalize = false) {
+      const r = this.range();
+      const a = this.read('a', r, normalize);
+      const b = this.read('b', r, normalize);
+      const sum = a + b;
+      const fits = sum >= r.min && sum <= r.max;
+      const wrapped = (((sum - r.min) % r.mod) + r.mod) % r.mod + r.min;
+      const saturated = sum > r.max ? r.max : sum < r.min ? r.min : sum;
+      const t = this.#type;
+      const s = this.#s;
+
+      this.querySelector('[data-range]')!.textContent = `${s.range}: ${r.min} … ${r.max}`;
+      this.drawBits(r, [
+        { label: 'a', value: a },
+        { label: 'b', value: b },
+        { label: 'a + b', value: wrapped, note: s.result, overflow: !fits },
+      ]);
+
+      const rows = [
+        { m: 'wrapping_add', v: String(wrapped), bad: false, changed: !fits },
+        { m: 'checked_add', v: fits ? `Some(${sum})` : s.none, bad: !fits, changed: !fits },
+        { m: 'saturating_add', v: String(saturated), bad: false, changed: !fits },
+        { m: 'overflowing_add', v: `(${wrapped}, ${!fits})`, bad: false, changed: !fits },
+      ];
+      this.querySelector('[data-results]')!.innerHTML = rows
+        .map(
+          (row) => `<div class="ie-card${row.changed ? ' is-over' : ''}${row.bad ? ' is-none' : ''}">
+            <code class="ie-m">a.${row.m}(b)</code><output class="ie-v">${row.v}</output></div>`,
+        )
+        .join('');
+
+      const fill = (tpl: string) =>
+        tpl.replace('{sum}', String(sum)).replace('{type}', t).replace('{min}', String(r.min)).replace('{max}', String(r.max));
+      this.querySelector('[data-caption]')!.innerHTML =
+        (fits ? fill(s.fits!) : fill(s.overflows!)) + (r.signed ? ` ${s.signedNote}` : '');
+      this.classList.toggle('overflowing', !fits);
+    }
+
+    drawBits(r: ReturnType<IntegerExplorer['range']>, rows: { label: string; value: bigint; note?: string; overflow?: boolean }[]) {
+      const cell = r.n > 16 ? 15 : r.n > 8 ? 22 : 34;
+      const gap = 3;
+      const labelW = 64;
+      const valueW = 110;
+      const rowH = cell + 22;
+      const width = labelW + r.n * (cell + gap) + valueW;
+      const height = rows.length * rowH + 14;
+      const svg = this.querySelector<SVGSVGElement>('[data-bits]')!;
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      let out = '';
+      rows.forEach((row, ri) => {
+        const y = ri * rowH + 18;
+        const u = ((row.value % r.mod) + r.mod) % r.mod;
+        out += `<text class="lbl" x="0" y="${y + cell / 2 + 4}">${row.label}</text>`;
+        for (let i = 0; i < r.n; i++) {
+          const bit = (u >> BigInt(r.n - 1 - i)) & 1n;
+          const x = labelW + i * (cell + gap) + (i > 0 && i % 8 === 0 ? 0 : 0);
+          const signBit = r.signed && i === 0;
+          out += `<g class="bit${bit ? ' on' : ''}${signBit ? ' sign' : ''}" style="--d:${i * 12}ms">
+            <rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="${Math.min(6, cell / 4)}"/>
+            ${cell >= 20 ? `<text x="${x + cell / 2}" y="${y + cell / 2 + 4}" text-anchor="middle">${bit}</text>` : ''}
+          </g>`;
+          if (i % 8 === 7 && i < r.n - 1) {
+            out += `<line class="byte-sep" x1="${x + cell + gap / 2}" x2="${x + cell + gap / 2}" y1="${y - 3}" y2="${y + cell + 3}"/>`;
+          }
+        }
+        const vx = labelW + r.n * (cell + gap) + 10;
+        out += `<text class="val${row.overflow ? ' over' : ''}" x="${vx}" y="${y + cell / 2 + 4}">${row.value}</text>`;
+        if (ri === 0 && r.signed) out += `<text class="note" x="${labelW}" y="${y - 6}">${this.#s.sign} ↓</text>`;
+        if (row.note) out += `<text class="note" x="${vx}" y="${y + cell + 14}">${row.note}</text>`;
+        if (ri === rows.length - 2) out += `<line class="sum-line" x1="${labelW}" x2="${vx + 60}" y1="${y + cell + 10}" y2="${y + cell + 10}"/>`;
+      });
+      svg.innerHTML = out;
+    }
+  }
+  customElements.define('integer-explorer', IntegerExplorer);
+</script>
+
+<style>
+  integer-explorer { display: block; }
+  .ie-controls { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+  .ie-field {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font: 600 0.85rem var(--font-mono); color: var(--text-muted);
+    & input { inline-size: 8.5rem; font-family: var(--font-mono); }
+  }
+  .ie-range { font: 0.75rem var(--font-mono); color: var(--text-faint); }
+  .ie-bits-wrap { overflow-x: auto; scrollbar-width: thin; }
+  .ie-bits { inline-size: 100%; min-inline-size: 22rem; block-size: auto; font-family: var(--font-mono); overflow: visible; }
+  .ie-bits :global(.lbl) { font-size: 13px; font-weight: 700; fill: var(--text-muted); }
+  .ie-bits :global(.bit rect) {
+    fill: var(--surface-2); stroke: var(--border-strong);
+    transition: fill var(--dur) var(--d), stroke var(--dur) var(--d);
+  }
+  .ie-bits :global(.bit text) { font-size: 12px; fill: var(--text-faint); }
+  .ie-bits :global(.bit.on rect) { fill: color-mix(in oklch, var(--stack) 30%, var(--surface)); stroke: var(--stack); }
+  .ie-bits :global(.bit.on text) { fill: var(--text); font-weight: 700; }
+  .ie-bits :global(.bit.sign rect) { stroke: var(--violet); stroke-width: 2; }
+  .ie-bits :global(.bit.sign.on rect) { fill: color-mix(in oklch, var(--violet) 35%, var(--surface)); }
+  .ie-bits :global(.byte-sep) { stroke: var(--border); stroke-dasharray: 2 2; }
+  .ie-bits :global(.sum-line) { stroke: var(--border-strong); }
+  .ie-bits :global(.val) { font-size: 14px; font-weight: 700; fill: var(--text); }
+  .ie-bits :global(.val.over) { fill: var(--warn); }
+  .ie-bits :global(.note) { font: 10px var(--font-sans); fill: var(--text-faint); }
+
+  .ie-results {
+    display: grid; gap: var(--space-2);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  }
+  .ie-results :global(.ie-card) {
+    display: grid; gap: var(--space-1); padding: var(--space-3);
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2);
+    transition: border-color var(--dur), background-color var(--dur);
+  }
+  .ie-results :global(.ie-m) { font-size: 0.75rem; color: var(--text-muted); }
+  .ie-results :global(.ie-v) { font: 700 1rem var(--font-mono); color: var(--text); }
+  .ie-results :global(.ie-card.is-over) {
+    border-color: color-mix(in oklch, var(--warn) 50%, var(--border));
+    background: color-mix(in oklch, var(--warn) 8%, var(--surface));
+  }
+  .ie-results :global(.ie-card.is-none .ie-v) { color: var(--danger); }
+</style>

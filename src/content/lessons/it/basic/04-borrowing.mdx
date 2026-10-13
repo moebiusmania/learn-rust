@@ -1,0 +1,197 @@
+---
+title: Borrowing e riferimenti
+description: Usare i valori senza possederli, la regola "aliasing XOR mutabilità", i non-lexical lifetimes e perché intere classi di bug non possono compilare.
+duration: 25
+tags: [riferimenti, "&mut", borrow checker, NLL, slice]
+---
+
+Spostare l'ownership dentro e fuori da ogni funzione sarebbe insopportabile. La maggior parte del codice deve solo *guardare* un valore, o modificarlo per un attimo, e poi restituirlo. A questo servono i **riferimenti**: prendi in **prestito** (borrow) un valore, e il proprietario se lo tiene. Il componente del compilatore che controlla i prestiti, il *borrow checker*, impone una sola regola, semplice, che però elimina in un colpo data race, invalidazione degli iteratori e puntatori pendenti.
+
+## Riferimenti condivisi: `&T`
+
+`&value` crea un riferimento condiviso. La funzione riceve un puntatore, il chiamante mantiene l'ownership, e niente viene copiato o liberato.
+
+```rust
+fn count_words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
+let title = String::from("The Rust Programming Language");
+let n = count_words(&title);       // prestito
+println!("{title} ha {n} parole"); // title è ancora nostra
+```
+
+Attraverso un `&T` puoi leggere ma non modificare. Puoi creare quanti riferimenti condivisi vuoi nello stesso momento: i lettori non si disturbano a vicenda.
+
+## Riferimenti mutabili: `&mut T`
+
+Per modificare un valore preso in prestito ti serve un riferimento esclusivo, `&mut T`. Sia il binding sia il prestito devono essere esplicitamente mutabili, e nel punto di chiamata si scrive `&mut`: la mutazione è visibile dove avviene, non solo nella firma della funzione.
+
+<Playground title="Leggere e scrivere tramite riferimenti">
+```rust
+fn total(values: &[i32]) -> i32 {
+    values.iter().sum()
+}
+
+fn double_all(values: &mut Vec<i32>) {
+    for v in values.iter_mut() {
+        *v *= 2; // * dereferenzia per arrivare all'intero
+    }
+    values.push(0);
+}
+
+fn main() {
+    let mut data = vec![1, 2, 3];
+    println!("totale = {}", total(&data));
+
+    double_all(&mut data); // esplicito nel punto di chiamata
+    println!("{data:?}, totale = {}", total(&data));
+}
+```
+</Playground>
+
+Nota che `total` accetta `&[i32]`, una slice, mentre noi passiamo `&data`, un `&Vec<i32>`. Il compilatore converte da solo (*deref coercion*), quindi le funzioni che leggono soltanto dovrebbero accettare slice e `&str` anziché `&Vec<T>` e `&String`: così funzionano con array, vettori e loro porzioni.
+
+## La regola: aliasing XOR mutabilità
+
+In ogni punto del programma, per un dato valore puoi avere **o**:
+
+- un numero qualsiasi di riferimenti condivisi `&T`, **oppure**
+- esattamente un riferimento mutabile `&mut T`,
+
+e mai entrambi. Inoltre, finché c'è un prestito attivo, nemmeno il proprietario può spostare o modificare il valore.
+
+Esplora i quattro scenari qui sotto. Ogni barra è un borrow, vivo da dove viene creato fino a dove viene **usato per l'ultima volta**.
+
+<BorrowTimeline />
+
+Perché questa regola vale la fatica? Perché quasi tutti i bug di memoria legati all'aliasing sono casi in cui *qualcuno modifica dei dati mentre qualcun altro tiene un puntatore al loro interno*. Lo scenario 2 è l'esempio classico:
+
+<Playground title="Leggere mentre si scrive" expectError>
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let first = &v[0];
+    v.push(4); // può riallocare il buffer in cui punta `first`
+    println!("first = {first}");
+}
+```
+</Playground>
+
+`push` può aver bisogno di più capacità: in quel caso alloca un buffer più grande, copia gli elementi e libera quello vecchio. `first` punterebbe allora a memoria liberata. In C++ il codice equivalente con `std::vector` compila ed è comportamento indefinito. Rust segnala `cannot borrow v as mutable because it is also borrowed as immutable`. Sposta il `println!` sopra il `push` e compila.
+
+<Callout type="runtime">
+I riferimenti sono normali puntatori macchina, senza contatori di riferimenti, lock o contabilità a runtime: il borrow checker gira in compilazione sulla MIR e poi sparisce. In più, la garanzia che un `&mut T` non abbia mai alias permette a rustc di dire a LLVM che il puntatore è `noalias`, sbloccando ottimizzazioni che i compilatori C possono applicare solo quando prometti `restrict`.
+</Callout>
+
+## Non-lexical lifetimes
+
+Un prestito dura fino al suo **ultimo utilizzo**, non fino alla fine del blocco che lo contiene. Si chiamano *non-lexical lifetimes* (NLL) e sono il comportamento di default da Rust 2018. Lo scenario 4 della linea temporale lo mostra: `r1` non viene più usato dopo la riga 3, quindi un nuovo prestito alla riga 4 va bene anche se `r1` è ancora sintatticamente nello scope.
+
+In pratica significa che spesso puoi risolvere un errore di borrowing *riordinando* il codice: finisci di usare il riferimento condiviso, poi modifica. Se trovi vecchi articoli con strani blocchi `{ }` aggiuntivi attorno ai prestiti, è un espediente pre-2018 che oggi serve di rado.
+
+## Invalidazione degli iteratori, esclusa per costruzione
+
+Modificare una collezione mentre la si scorre è un bug classico in ogni linguaggio. Quello che cambia è quando te ne accorgi.
+
+<Compare left="Java">
+```java
+List<Integer> v = new ArrayList<>(List.of(1, 2, 3));
+for (Integer x : v) {
+    if (x == 2) v.add(20);
+}
+// a runtime: ConcurrentModificationException
+// (C++: comportamento indefinito, nessun messaggio)
+```
+
+```rust
+let mut v = vec![1, 2, 3];
+for x in &v {
+    if *x == 2 { v.push(20); }
+}
+// in compilazione: cannot borrow `v` as mutable
+// because it is also borrowed as immutable
+```
+</Compare>
+
+Il ciclo `for` mantiene un prestito condiviso di `v` per tutta la sua durata, quindi `push` non può ottenere il prestito esclusivo di cui ha bisogno. Java lo rileva a runtime con un contatore di modifiche che ogni `ArrayList` si porta dietro; il C++ non lo rileva affatto. Rust non ha bisogno di contatori, perché il programma non viene nemmeno compilato. La soluzione è rendere esplicite le due fasi:
+
+<Playground title="Prima raccogli, poi modifica">
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+
+    // 1. lettura: calcola cosa aggiungere (il prestito condiviso finisce qui)
+    let extra: Vec<i32> = v.iter().filter(|&&x| x % 2 == 1).map(|x| x * 10).collect();
+
+    // 2. scrittura: ora un prestito esclusivo è consentito
+    v.extend(extra);
+    println!("{v:?}");
+
+    // oppure modifica sul posto, elemento per elemento, tramite &mut
+    for x in v.iter_mut() {
+        *x += 1;
+    }
+    println!("{v:?}");
+}
+```
+</Playground>
+
+## Niente riferimenti pendenti
+
+Un riferimento non può mai sopravvivere al valore a cui punta. Il tentativo più semplice di creare un puntatore pendente non supera nemmeno la firma:
+
+```rust
+fn dangle() -> &String {
+    let s = String::from("hello");
+    &s // s viene rilasciata alla fine di questa funzione
+}
+// error[E0106]: missing lifetime specifier
+// help: this function's return type contains a borrowed value,
+//       but there is no value for it to be borrowed from
+```
+
+Una funzione che crea un valore non può restituirne un riferimento: restituisci la `String` posseduta e lascia che sia il chiamante a possederla. Il meccanismo generale dietro questo controllo, i **lifetime**, è l'argomento di una lezione del percorso intermedio; per ora ricorda che un riferimento restituito deve puntare dentro uno degli input.
+
+<Callout type="compare" from="Go">
+L'escape analysis di Go sposta in silenzio `s` sullo heap in modo che `&s` resti valido, e il garbage collector la libererà più tardi. Rust non cambia mai alle tue spalle il posto in cui vive un valore: rifiuta il riferimento e ti chiede di decidere chi possiede i dati.
+</Callout>
+
+## Slice: prendere in prestito una parte di una collezione
+
+Una **slice** è un riferimento a un intervallo contiguo di elementi: `&[T]` per array e vettori, `&str` per le stringhe. È un *fat pointer*: un indirizzo più una lunghezza, 16 byte sui target a 64 bit.
+
+<Playground title="Anche le slice sono prestiti">
+```rust
+fn first_word(s: &str) -> &str {
+    match s.find(' ') {
+        Some(i) => &s[..i],
+        None => s,
+    }
+}
+
+fn main() {
+    let mut sentence = String::from("borrow checker amichevole");
+    let word = first_word(&sentence); // prende in prestito parte di `sentence`
+    println!("prima parola: {word}");
+
+    let scores = [90, 72, 85, 60];
+    let middle = &scores[1..3];       // &[i32] di lunghezza 2
+    println!("{middle:?}, len {}", middle.len());
+
+    sentence.clear(); // va bene: `word` non viene più usata
+    println!("ora: {sentence:?}");
+}
+```
+</Playground>
+
+Poiché `word` prende in prestito da `sentence`, chiamare `sentence.clear()` *mentre `word` è ancora in uso* verrebbe rifiutato: una slice non può mai vedere la sua sorgente troncata sotto i piedi. Prova a spostare il primo `println!` sotto `clear()` per vedere l'errore. Lo slicing delle stringhe lavora su offset in **byte** e va in panic se tagli a metà di un carattere UTF-8 multi-byte, quindi preferisci metodi come `find`, `split` e `char_indices` agli indici calcolati a mano.
+
+## Punti chiave
+
+- `&T` prende in prestito per leggere, `&mut T` prende in prestito in esclusiva per scrivere; il proprietario mantiene il valore.
+- Aliasing XOR mutabilità: tanti lettori o un solo scrittore, mai entrambi contemporaneamente.
+- Un prestito dura fino al suo ultimo utilizzo (NLL); spesso la soluzione è riordinare il codice.
+- Invalidazione degli iteratori, use-after-free tramite riferimenti e puntatori pendenti sono errori di compilazione.
+- Nelle funzioni che leggono soltanto accetta `&str` e `&[T]`: le slice sono fat pointer nei dati di qualcun altro.
+- Tutto questo non costa nulla a runtime: i riferimenti sono semplici puntatori.

@@ -1,0 +1,202 @@
+---
+title: Unsafe Rust e FFI
+description: Cosa sblocca davvero unsafe, i puntatori grezzi, costruire astrazioni sicure, comportamento indefinito e Miri, e il dialogo con il C in entrambe le direzioni.
+duration: 30
+tags: [unsafe, puntatori grezzi, FFI, ABI C, Miri]
+---
+
+Il Rust safe è un linguaggio volutamente limitato: il compilatore deve poter *dimostrare* che il tuo codice è memory safe. Alcuni programmi corretti vanno oltre ciò che riesce a dimostrare, come una lista doppiamente concatenata, una coda lock-free o una chiamata a una libreria C. `unsafe` è la via di fuga. Non è una modalità in cui vale tutto; è un insieme piccolo ed esplicito di operazioni aggiuntive della cui correttezza ti fai garante **tu**.
+
+## I cinque superpoteri
+
+Dentro un blocco `unsafe` o una `unsafe fn` puoi fare esattamente cinque cose che altrove non puoi fare:
+
+1. Dereferenziare un puntatore grezzo (`*const T`, `*mut T`).
+2. Chiamare una funzione o un metodo `unsafe`, comprese le funzioni esterne (C).
+3. Leggere o modificare una `static` mutabile.
+4. Implementare un trait `unsafe`, come `Send` o `Sync`.
+5. Leggere un campo di una `union`.
+
+La lista è completa. Tutto il resto, compresi il borrow checker, il controllo dei tipi e quello dei lifetime, continua a funzionare esattamente come prima. Mettere `unsafe` attorno a codice che non compila per un errore di borrow non lo fa compilare.
+
+<UnsafeBoundary />
+
+## Puntatori grezzi
+
+I puntatori grezzi sono l'equivalente Rust dei puntatori C: possono essere nulli, pendenti, disallineati o in aliasing, e il compilatore non ne traccia il lifetime. **Crearne** uno è safe; **dereferenziarlo** no.
+
+<Playground title="Puntatori grezzi">
+```rust
+fn main() {
+    let mut x = 10;
+    let p = &raw mut x; // creare un puntatore grezzo è safe...
+    unsafe {
+        *p += 1; // ...dereferenziarlo no
+        println!("x = {}", *p);
+    }
+
+    // I puntatori grezzi possono essere nulli, pendenti o disallineati:
+    // al sistema dei tipi non importa finché non li dereferenzi.
+    let bogus = 0x1234usize as *const i32;
+    println!("bogus = {bogus:p}, is_null = {}", bogus.is_null());
+}
+```
+</Playground>
+
+La sintassi `&raw mut x` (stabile da Rust 1.82) crea direttamente un puntatore grezzo, senza passare per un `&mut` intermedio. Questo conta per i campi packed e per la memoria non ancora inizializzata, dove anche un riferimento temporaneo sarebbe comportamento indefinito.
+
+## Costruire astrazioni sicure
+
+L'uso idiomatico di `unsafe` non consiste nello spargerlo nel codice applicativo. Consiste nello scrivere una piccola funzione o un tipo la cui **interfaccia è safe**, con le operazioni unsafe incapsulate e giustificate all'interno. La libreria standard ne è piena: `Vec`, `String`, `HashMap`, `Rc`, `Mutex` contengono tutti `unsafe` al loro interno.
+
+L'esempio classico è dividere una slice in due metà mutabili. Il borrow checker non può vedere che le due metà non si sovrappongono:
+
+```rust
+fn split_at_mut(values: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
+    (&mut values[..mid], &mut values[mid..])
+    // error[E0499]: cannot borrow `*values` as mutable more than once at a time
+}
+```
+
+Con i puntatori grezzi possiamo esprimere ciò che sappiamo, verificare ciò che dobbiamo e documentare perché è corretto:
+
+<Playground title="Uno split_at_mut safe costruito su unsafe">
+```rust
+use std::slice;
+
+/// Divide una slice mutabile in due metà mutabili che non si sovrappongono.
+fn split_at_mut(values: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
+    let len = values.len();
+    assert!(mid <= len, "mid fuori dai limiti");
+    let ptr = values.as_mut_ptr();
+    // SAFETY: `mid <= len` è verificato sopra, quindi entrambi gli intervalli
+    // stanno dentro l'allocazione originale e non si sovrappongono:
+    // due `&mut` sono corretti.
+    unsafe {
+        (
+            slice::from_raw_parts_mut(ptr, mid),
+            slice::from_raw_parts_mut(ptr.add(mid), len - mid),
+        )
+    }
+}
+
+fn main() {
+    let mut data = [1, 2, 3, 4, 5, 6];
+    let (left, right) = split_at_mut(&mut data, 2);
+    left[0] = 100;
+    right[0] = 300;
+    println!("{data:?}");
+}
+```
+</Playground>
+
+Tre convenzioni rendono questo codice revisionabile:
+
+- **L'`assert!` non è facoltativo.** La funzione è safe da chiamare, quindi deve essere corretta per *ogni* input, compreso un `mid` sbagliato. Togli il controllo e del codice safe potrebbe leggere fuori dai limiti.
+- **Un commento `// SAFETY:`** spiega perché le precondizioni di ogni operazione unsafe sono rispettate. Clippy può imporlo (`clippy::undocumented_unsafe_blocks`).
+- **Una `unsafe fn` documenta una sezione `# Safety`** che elenca cosa deve garantire chi la chiama. Trovarsi dentro una `unsafe fn` non esonera il corpo: dall'edizione 2024 il lint `unsafe_op_in_unsafe_fn` avvisa di default, quindi ogni operazione unsafe va comunque racchiusa nel proprio blocco, con la propria giustificazione.
+
+<Callout type="compare" from="C / C++">
+In C ogni dereferenziazione di puntatore è "unsafe" e niente la segnala. In Rust la superficie unsafe si trova con grep: un crate da 50 000 righe può contenere una dozzina di blocchi `unsafe`, ed è lì che si concentrano revisori, fuzzer e Miri. Un bug di memoria nel codice safe è, per definizione, un bug in uno di quei blocchi (o nel compilatore).
+</Callout>
+
+## Comportamento indefinito e Miri
+
+Violare una precondizione unsafe causa **comportamento indefinito** (undefined behaviour, UB): l'ottimizzatore presume che non possa accadere, quindi il programma può fare qualsiasi cosa, compreso sembrare funzionante. In alcuni punti l'elenco di UB di Rust è più severo di quello del C. Esempi:
+
+- Dereferenziare un puntatore pendente, nullo o disallineato.
+- Produrre un valore non valido: un `bool` diverso da 0 o 1, un `char` fuori da Unicode, un `&T` nullo, un enum con un discriminante sconosciuto.
+- Creare un `&mut T` mentre un altro riferimento agli stessi dati è vivo, anche se non lo usi mai. Le regole di aliasing valgono anche per i riferimenti creati nel codice unsafe.
+- Un data race, che il codice safe rende impossibile.
+
+Poiché l'UB può essere silenzioso, il progetto Rust mantiene **Miri**, un interprete della MIR che ne rileva la maggior parte a runtime:
+
+```sh
+rustup +nightly component add miri
+cargo +nightly miri test
+```
+
+Esegui i test sotto Miri ogni volta che scrivi `unsafe`. Individua accessi fuori dai limiti, use-after-free, valori non validi e violazioni del modello di aliasing che sulla tua macchina non andrebbero mai in crash.
+
+<Callout type="runtime">
+Perché l'UB è così pericoloso proprio in Rust? Perché il compilatore passa a LLVM garanzie molto forti. Ogni `&mut T` è marcato `noalias`, ogni `&T` a dati immutabili è marcato in sola lettura, ogni riferimento è `nonnull` e `dereferenceable`. Queste annotazioni abilitano ottimizzazioni che i compilatori C non possono fare. Se il codice unsafe le viola, le trasformazioni di LLVM diventano sbagliate in modi molto difficili da diagnosticare.
+</Callout>
+
+## FFI: chiamare il C da Rust
+
+Rust parla nativamente l'ABI del C. Dichiari le funzioni esterne in un blocco `extern "C"` e le chiami come qualsiasi altra funzione. Dall'**edizione 2024** il blocco stesso deve essere marcato `unsafe extern`, perché scrivendolo affermi che le firme sono corrette, cosa che il compilatore non può verificare. Gli elementi senza precondizioni possono essere marcati `safe`.
+
+<Playground title="Chiamare la libc ed esportare un simbolo C">
+```rust
+use std::ffi::{CStr, c_char, c_int};
+
+// Edizione 2024: i blocchi extern vanno marcati `unsafe`, perché il
+// compilatore non può verificare che le firme corrispondano alla libreria C.
+unsafe extern "C" {
+    safe fn abs(x: c_int) -> c_int; // nessuna precondizione: chiamabile da codice safe
+    fn strlen(s: *const c_char) -> usize; // richiede un puntatore valido terminato da NUL
+}
+
+// Esportata con l'ABI C e un simbolo non decorato, chiamabile dal C.
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn main() {
+    println!("abs(-42) = {}", abs(-42));
+
+    let greeting: &CStr = c"ciao dal C";
+    // SAFETY: `CStr` garantisce un buffer terminato da NUL che sopravvive alla chiamata.
+    let n = unsafe { strlen(greeting.as_ptr()) };
+    println!("strlen = {n}");
+
+    println!("rust_add = {}", rust_add(2, 3));
+}
+```
+</Playground>
+
+Cose da notare:
+
+- I letterali `c"..."` (Rust 1.77+) producono un `&CStr`, terminato da NUL, pronto per il C.
+- `CString` e `CStr` convertono tra stringhe Rust (con lunghezza esplicita, senza NUL, UTF-8) e stringhe C (terminate da NUL, byte qualsiasi).
+- `#[unsafe(no_mangle)]` mantiene il nome del simbolo `rust_add` così che un linker C possa trovarlo. Nell'edizione 2024 si scrive con `unsafe(...)` perché esportare un simbolo può entrare in conflitto con altri.
+- Le struct che attraversano il confine hanno bisogno di `#[repr(C)]`, come hai visto nella lezione precedente.
+
+<Compare left="C">
+```c
+/* mylib.h */
+#include <stdint.h>
+int32_t rust_add(int32_t a, int32_t b);
+
+/* main.c */
+#include "mylib.h"
+int main(void) {
+    return rust_add(2, 3) == 5 ? 0 : 1;
+}
+```
+
+```rust
+// Cargo.toml: [lib] crate-type = ["cdylib"]
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_add(a: i32, b: i32) -> i32 {
+    a + b
+}
+// cbindgen può generare mylib.h da qui
+```
+</Compare>
+
+Raramente scriverai a mano grandi blocchi `extern`. **bindgen** genera le dichiarazioni Rust a partire dagli header C, e **cbindgen** genera gli header C dalla tua API Rust. Crate di livello più alto come **PyO3** (Python), **napi-rs** (Node.js), **jni** (Java) e **cxx** (C++) costruiscono ponti sicuri e idiomatici sopra la stessa ABI C: è così che Rust finisce dentro pacchetti Python, moduli npm e browser.
+
+<Callout type="warn" title="I panic non devono attraversare il confine FFI">
+Srotolare (unwind) un panic di Rust dentro frame C è comportamento indefinito, a meno di usare l'ABI `extern "C-unwind"`. Nelle funzioni esportate verso il C, intercetta i panic con `std::panic::catch_unwind` e convertili in codici di errore, oppure compila con `panic = "abort"`.
+</Callout>
+
+## Punti chiave
+
+- `unsafe` sblocca cinque operazioni; borrow checker e sistema dei tipi restano pienamente attivi.
+- Creare puntatori grezzi è safe, dereferenziarli no; `&raw const` / `&raw mut` evitano riferimenti intermedi.
+- Il codice unsafe idiomatico è racchiuso in piccole astrazioni safe, con controlli e commenti `// SAFETY:`.
+- Il comportamento indefinito comprende valori non validi e violazioni di aliasing, non solo puntatori sbagliati; esegui il codice unsafe sotto Miri.
+- L'FFI usa l'ABI C: blocchi `unsafe extern "C"` per chiamare il C, `#[unsafe(no_mangle)] extern "C" fn` per essere chiamati, `#[repr(C)]` per le struct condivise.
+- Usa bindgen, cbindgen o ponti di più alto livello invece di binding scritti a mano, e non lasciare mai che un panic arrivi fino al C.

@@ -1,0 +1,217 @@
+---
+title: Collezioni e stringhe
+description: Vec e slice, String contro &str e perché non si può indicizzare una stringa, HashMap con la entry API e i tre modi di iterare.
+duration: 25
+tags: [Vec, slice, String, "&str", UTF-8, HashMap]
+---
+
+Tre tipi coprono la maggior parte dei dati di tutti i giorni in Rust: `Vec<T>`, `String` e `HashMap<K, V>`. Nessuno di loro è speciale: sono normali struct di libreria che possiedono un buffer sullo heap, quindi tutto ciò che hai imparato su ownership e borrowing si applica senza modifiche. Quello che cambia è quanto del loro comportamento in memoria ora riesci a *vedere*.
+
+## Vec: un array che cresce
+
+Un `Vec<T>` è fatto di tre word sullo stack: un **puntatore** a un buffer sullo heap, la **lunghezza** (quanti elementi sono inizializzati) e la **capacità** (quanti ne entrano prima che il buffer debba crescere). Quando `len` raggiunge `capacity`, `push` alloca un buffer più grande, vi sposta gli elementi e libera quello vecchio. Prova:
+
+<VecGrowth />
+
+Raddoppiare la capacità rende `push` O(1) *ammortizzato*: il costo totale di tutte le copie resta proporzionale al numero di elementi. Se conosci la dimensione finale, `Vec::with_capacity(n)` evita del tutto le riallocazioni.
+
+<Playground title="Vec, capacità e slice">
+```rust
+fn sum(values: &[i32]) -> i32 {
+    values.iter().sum()
+}
+
+fn main() {
+    let mut v: Vec<i32> = Vec::with_capacity(4);
+    for n in [3, 1, 4, 1, 5, 9] {
+        v.push(n);
+        println!("push {n}: len={} capacity={}", v.len(), v.capacity());
+    }
+
+    // Uno slice è una vista in prestito (puntatore + lunghezza) su memoria contigua
+    let middle: &[i32] = &v[1..4];
+    println!("middle = {middle:?}, sum = {}", sum(middle));
+    println!("whole sum = {}", sum(&v)); // &Vec<i32> viene convertito in &[i32]
+    let array = [10, 20, 30];
+    println!("array sum = {}", sum(&array)); // e lo stesso vale per &[i32; 3]
+
+    v.sort();
+    v.dedup();
+    println!("ordinato e senza duplicati: {v:?}");
+    println!("first = {:?}, get(99) = {:?}", v.first(), v.get(99));
+}
+```
+</Playground>
+
+### Slice: viste in prestito
+
+`&[T]` è uno **slice**: un puntatore più una lunghezza, che prende in prestito una sequenza contigua di `T` posseduta da qualcun altro. `&v[1..4]` prende in prestito una parte di un vettore, `&v` lo prende tutto, e gli array si convertono allo stesso modo. Una funzione che legge soltanto una sequenza dovrebbe accettare `&[T]`, non `&Vec<T>`: così accetta vettori, array e sottointervalli, senza alcun costo.
+
+<Callout type="runtime" title="Perché un push può invalidare i riferimenti">
+Una riallocazione *sposta* gli elementi a un nuovo indirizzo. Qualsiasi riferimento al vecchio buffer punterebbe ora a memoria liberata: in C++ è il classico bug di invalidazione degli iteratori. In Rust, tenere un `&` dentro un `Vec` significa prendere in prestito l'intero `Vec`, e `push` richiede `&mut self`, quindi le due cose non possono sovrapporsi. Il compilatore rifiuta il bug prima ancora che esista:
+</Callout>
+
+<Playground title="Modificare un Vec mentre lo si scorre" expectError>
+```rust
+fn main() {
+    let mut scores = vec![10, 20, 30];
+    for score in &scores {
+        if *score == 20 {
+            scores.push(25); // fa crescere il Vec mentre lo si scorre
+        }
+    }
+    println!("{scores:?}");
+}
+```
+</Playground>
+
+<Callout type="compare" from="Java / C++">
+Java lo rileva a runtime con una `ConcurrentModificationException`, se il ciclo viene effettivamente eseguito. C++ non lo rileva affatto: è undefined behaviour. Rust lo segnala in compilazione come un normale errore di borrowing (E0502). La soluzione è raccogliere prima le modifiche e applicarle dopo il ciclo, oppure usare metodi come `retain`, `extend` o `iter().position()`.
+</Callout>
+
+## String e &str
+
+Rust ha due tipi di stringa principali, e la divisione rispecchia quella tra `Vec<T>` e `&[T]`:
+
+| Tipo | Cos'è | Possiede i dati | Uso tipico |
+| --- | --- | --- | --- |
+| `String` | Un `Vec<u8>` che garantisce UTF-8 valido | Sì | Costruire e memorizzare testo |
+| `&str` | Uno slice di byte UTF-8 (puntatore + lunghezza) | No | Leggere testo, parametri delle funzioni |
+| `&'static str` | Un `&str` che punta dentro il binario stesso | No | Letterali come `"hello"` |
+| `char` | Un singolo Unicode scalar value, sempre 4 byte | — | Caratteri singoli |
+
+Come per gli slice, preferisci `&str` per i parametri: un `&String` viene convertito automaticamente in `&str`, e lo stesso vale per un letterale.
+
+<Playground title="String, &str e UTF-8">
+```rust
+fn main() {
+    let owned: String = String::from("Caffè"); // heap, estendibile, posseduta
+    let literal: &str = "naïve 🦀";            // in prestito, salvata nel binario
+    let slice: &str = &owned[0..4];             // vista in prestito su `owned`
+
+    println!("{owned:?}: {} byte, {} caratteri", owned.len(), owned.chars().count());
+    println!("{literal:?}: {} byte, {} caratteri", literal.len(), literal.chars().count());
+    println!("slice = {slice:?}");
+
+    // Itera per char (Unicode scalar value), con gli offset in byte
+    for (offset, c) in literal.char_indices() {
+        print!("{offset}:{c} ");
+    }
+    println!();
+    println!("byte di 'è': {:x?}", "è".as_bytes());
+
+    // Costruire stringhe
+    let mut s = String::new();
+    s.push_str("Ciao");
+    s.push(',');
+    s += " mondo";
+    let shout = format!("{}!", s.to_uppercase());
+    println!("{shout}");
+
+    // &owned[0..5] andrebbe in panic: il byte 5 è a metà di 'è'
+}
+```
+</Playground>
+
+### Perché s[0] non compila
+
+Nella maggior parte dei linguaggi `s[0]` restituisce "il primo carattere". In Rust è un errore di compilazione:
+
+```rust
+let s = String::from("hey");
+let c = s[0]; // error[E0277]: the type `str` cannot be indexed by `{integer}`
+```
+
+Il motivo è che le stringhe sono UTF-8, una codifica a larghezza variabile: `è` occupa 2 byte, `🦀` ne occupa 4. "Il carattere all'indice 5" non si può trovare in O(1), e "carattere" è comunque ambiguo: byte, Unicode scalar value o grafema percepito dall'utente (un'emoji con un modificatore di carnagione è fatta di più scalar value)? Rust ti obbliga a dire quale intendi:
+
+- `s.as_bytes()[i]` per i byte, O(1).
+- `s.chars().nth(i)` per gli Unicode scalar value, O(n).
+- `&s[a..b]` per una sottostringa tramite un intervallo di **byte**, che va in panic se `a` o `b` cadono a metà di un carattere.
+- Per i grafemi serve un crate come `unicode-segmentation`.
+
+<Callout type="compare" from="JavaScript / Python / Java">
+Le stringhe di JavaScript e Java sono internamente in UTF-16, quindi `"🦀".length` vale 2 e l'indicizzazione può spezzare un carattere a metà. Python 3 sceglie per ogni stringa una rappresentazione a larghezza fissa (1, 2 o 4 byte per code point) per rendere l'indicizzazione O(1), al prezzo di memoria e conversioni. Rust usa UTF-8 ovunque, la stessa codifica di file e rete, e sposta il costo nei rari punti in cui serve davvero l'accesso posizionale.
+</Callout>
+
+## HashMap e la entry API
+
+`HashMap<K, V>` si trova in `std::collections` e funziona con qualsiasi tipo di chiave che implementi `Eq` e `Hash` (derivabili per i tuoi tipi). Le ricerche restituiscono `Option<&V>` invece di `null` o di un `KeyError`. La **entry API** gestisce lo schema "inserisci se manca, poi aggiorna" con una sola ricerca nella tabella, e senza il problema del doppio borrow in cui incapperesti con un `get` seguito da un `insert`.
+
+<Playground title="Contare le parole con entry">
+```rust
+use std::collections::HashMap;
+
+fn main() {
+    let text = "the quick brown fox jumps over the lazy dog the end";
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for word in text.split_whitespace() {
+        // entry: una sola ricerca per trovare-o-inserire, poi modifica sul posto
+        *counts.entry(word).or_insert(0) += 1;
+    }
+
+    let mut ranked: Vec<(&str, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    println!("top 3: {:?}", &ranked[..3]);
+
+    let mut stock = HashMap::from([("apples", 3), ("pears", 0)]);
+    stock.insert("plums", 7);
+    if let Some(n) = stock.get_mut("pears") {
+        *n += 5;
+    }
+    println!("pears: {:?}, kiwis: {:?}", stock.get("pears"), stock.get("kiwis"));
+
+    stock.entry("kiwis").or_insert(12);
+    let mut keys: Vec<_> = stock.keys().collect();
+    keys.sort(); // l'ordine di iterazione di HashMap non è specificato
+    println!("{keys:?}");
+}
+```
+</Playground>
+
+Due comportamenti predefiniti da conoscere: l'ordine di iterazione **non è specificato** (cambia da un'esecuzione all'altra), e l'hasher predefinito, SipHash 1-3, è scelto per resistere agli attacchi di hash flooding più che per la velocità pura. Usa `BTreeMap` quando ti servono chiavi ordinate, e un hasher più veloce come `ahash` o `rustc-hash` quando le chiavi non sono controllate da un potenziale attaccante.
+
+## Tre modi di iterare
+
+Un ciclo `for` chiama `IntoIterator` su ciò che gli passi, e la forma che scegli decide cosa sia ogni elemento:
+
+| Ciclo | Tipo dell'elemento | Effetto sulla collezione |
+| --- | --- | --- |
+| `for x in &v` | `&T` | In prestito, invariata, utilizzabile dopo |
+| `for x in &mut v` | `&mut T` | In prestito esclusivo, gli elementi si possono modificare |
+| `for x in v` | `T` | Spostata: la collezione viene consumata |
+
+<Playground title="Per riferimento, per riferimento mutabile, per valore">
+```rust
+fn main() {
+    let mut names = vec![String::from("ada"), String::from("grace"), String::from("linus")];
+
+    for name in &names {
+        // &String: borrow condiviso, sola lettura
+        print!("{name} ");
+    }
+    println!();
+
+    for name in &mut names {
+        // &mut String: borrow esclusivo, modifica sul posto
+        name.make_ascii_uppercase();
+    }
+
+    for name in names {
+        // String: prende l'ownership, il Vec viene consumato
+        println!("posseduto {name} ({} byte)", name.len());
+    }
+    // println!("{names:?}"); // error[E0382]: borrow of moved value: `names`
+}
+```
+</Playground>
+
+Iterare per valore non è una trappola per le prestazioni: sposta fuori ogni `String` senza copiarne il buffer sullo heap, e alla fine libera il buffer del vettore. È la scelta giusta quando trasformi una collezione in un'altra e l'originale non ti serve più.
+
+## Punti chiave
+
+- `Vec<T>` è puntatore, lunghezza e capacità; crescendo raddoppia il buffer e sposta gli elementi, quindi `push` è O(1) ammortizzato.
+- Accetta `&[T]` e `&str` come parametri: vanno bene per qualsiasi proprietario di dati contigui.
+- Il borrow checker trasforma l'invalidazione degli iteratori in un errore di compilazione.
+- `String` è UTF-8 posseduto; `&str` ne è uno slice in prestito. L'indicizzazione con interi non è permessa perché UTF-8 ha larghezza variabile.
+- Le ricerche in `HashMap` restituiscono `Option`; la entry API inserisce-o-aggiorna con una sola ricerca. L'ordine di iterazione non è specificato.
+- `&v`, `&mut v` e `v` in un ciclo `for` danno rispettivamente `&T`, `&mut T` e `T`.

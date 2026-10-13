@@ -1,0 +1,21 @@
+{
+  "title": "Ownership, passo dopo passo",
+  "subtitle": "Segui chi possiede il buffer sullo heap a ogni riga",
+  "prev": "Indietro",
+  "next": "Avanti",
+  "reset": "Ricomincia",
+  "stack": "STACK",
+  "heap": "HEAP",
+  "moved": "spostato",
+  "freed": "liberato",
+  "steps": [
+    "<code>String::from</code> alloca 5 byte sullo heap. La <code>String</code> in sé è una struct di 24 byte sullo stack (puntatore, lunghezza, capacità) e <code>s1</code> ne è il <strong>proprietario</strong>.",
+    "<code>let s2 = s1</code> copia solo l'intestazione da 24 byte, non i byte sullo heap. L'ownership si <strong>sposta</strong> (move) su <code>s2</code>; <code>s1</code> diventa staticamente non valida. Due variabili non possiedono mai lo stesso buffer.",
+    "Usare <code>s1</code> dopo il move viene rifiutato in compilazione con <code>error[E0382]: borrow of moved value: `s1`</code>. Non c'è alcun controllo a runtime: il compilatore semplicemente rifiuta il programma.",
+    "<code>clone()</code> è il modo esplicito e visibile di duplicare i dati sullo heap: una seconda allocazione con il suo proprietario, <code>s3</code>. In Rust le copie costose non avvengono mai in modo implicito.",
+    "Passare <code>s3</code> per valore lo sposta nel parametro <code>s</code> di <code>takes</code>. Viene creato un nuovo stack frame; ora il buffer appartiene a quel frame.",
+    "Quando <code>takes</code> ritorna, il suo frame viene rimosso e <code>s</code> esce dallo scope: viene eseguito <code>drop</code> e il secondo buffer viene liberato, proprio qui, in modo deterministico.",
+    "Tornati in <code>main</code>, <code>s2</code> possiede ancora il primo buffer e si può usare normalmente. <code>s1</code> e <code>s3</code> sono stati spostati, quindi non possiedono nulla.",
+    "Alla parentesi graffa di chiusura <code>s2</code> esce dallo scope e il suo buffer viene liberato. Il compilatore sa che <code>s1</code> e <code>s3</code> sono stati spostati, quindi niente viene liberato due volte e niente va perso."
+  ]
+}

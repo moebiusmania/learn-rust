@@ -1,0 +1,39 @@
+---
+import Logo from './Logo.astro';
+import Icon from './Icon.astro';
+import LanguageSwitcher from './LanguageSwitcher.astro';
+import ThemeToggle from './ThemeToggle.astro';
+import { useTranslations } from '@/i18n';
+import { tracks, type Locale, type Track } from '@/i18n/config';
+import { localeUrl } from '@/lib/url';
+import { getTrackInfo } from '@/lib/content';
+
+interface Props { lang: Locale; currentTrack?: Track; progress?: boolean }
+const { lang, currentTrack, progress = false } = Astro.props;
+const { t } = useTranslations(lang);
+const trackLinks = await Promise.all(
+  tracks.map(async (id) => ({ id, href: localeUrl(lang, id), title: (await getTrackInfo(lang, id)).title })),
+);
+---
+<header class="site-header">
+  <div class="container">
+    <a class="brand" href={localeUrl(lang)} aria-label={t('site.title')}>
+      <Logo />
+      <span class="brand-text">{t('site.shortTitle')}</span>
+    </a>
+    <nav class="main-nav" aria-label={t('nav.tracks')}>
+      {trackLinks.map((l) => <a href={l.href} aria-current={l.id === currentTrack ? 'page' : undefined}>{l.title}</a>)}
+    </nav>
+    <div class="header-tools">
+      <ThemeToggle lang={lang} />
+      <LanguageSwitcher lang={lang} />
+      <button class="menu-button" type="button" popovertarget="track-menu" aria-label={t('nav.menu')}>
+        <Icon name="menu" />
+      </button>
+    </div>
+  </div>
+  {progress && <div class="reading-progress" aria-hidden="true" />}
+  <div id="track-menu" class="menu-popover" popover>
+    {trackLinks.map((l) => <a href={l.href}>{l.title}</a>)}
+  </div>
+</header>

@@ -1,0 +1,455 @@
+---
+/**
+ * Canvas model of a Vec<i32>: the (ptr, len, cap) triple on the stack and the
+ * heap buffer it points to. Reallocations are animated as a move into a new
+ * buffer (the heap area has two slots, so the address visibly changes).
+ * Growth follows std's RawVec: first allocation 4 elements, then doubling.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string; push: string; push10: string; pop: string; shrink: string; clear: string;
+  stack: string; heap: string; freed: string; len: string; capacity: string; heapBytes: string; reallocs: string; bytesCopied: string;
+  captions: Record<string, string>;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'vec-growth');
+const MAX = 32;
+---
+<WidgetFrame
+  tag="vec-growth"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="memory"
+  data-captions={JSON.stringify(s.captions)}
+  data-labels={JSON.stringify({ stack: s.stack, heap: s.heap, freed: s.freed })}
+  data-max={String(MAX)}
+>
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm" data-op="push"><code>{s.push}</code></button>
+    <button type="button" class="btn btn-sm" data-op="push10"><code>{s.push10}</code></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-op="pop"><code>{s.pop}</code></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-op="shrink"><code>{s.shrink}</code></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-op="clear"><code>{s.clear}</code></button>
+  </div>
+  <canvas class="widget-canvas" aria-hidden="true"></canvas>
+  <dl class="vg-stats">
+    <div><dt>{s.len}</dt><dd data-stat="len">0</dd></div>
+    <div><dt>{s.capacity}</dt><dd data-stat="cap">0</dd></div>
+    <div><dt>{s.heapBytes}</dt><dd data-stat="bytes">0</dd></div>
+    <div><dt>{s.reallocs}</dt><dd data-stat="reallocs">0</dd></div>
+    <div><dt>{s.bytesCopied}</dt><dd data-stat="copied">0</dd></div>
+  </dl>
+  <div class="widget-caption" aria-live="polite" data-caption set:html={s.captions.initial} />
+  <span class="vg-probe" aria-hidden="true"></span>
+</WidgetFrame>
+
+<script>
+  const ELEM = 4; // size_of::<i32>()
+  const COLOR_TOKENS = ['--accent', '--accent-strong', '--text', '--text-muted', '--text-faint', '--border', '--border-strong',
+    '--surface', '--surface-2', '--stack', '--heap', '--danger', '--code-bg'] as const;
+
+  interface Anim { t0: number; dur: number; from: number; to: number | null; oldCap: number; moved: number[] }
+
+  const ease = (t: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+
+  class VecGrowth extends HTMLElement {
+    #vals: number[] = [];
+    #cap = 0;
+    #slot = 0; // which heap slot holds the live buffer
+    #reallocs = 0;
+    #copied = 0;
+    #counter = 0;
+    #anim: Anim | null = null;
+    #pulse: { i: number; t0: number } | null = null;
+    #canvas!: HTMLCanvasElement;
+    #ctx!: CanvasRenderingContext2D;
+    #colors: Record<string, string> = {};
+    #mono = 'monospace';
+    #captions: Record<string, string> = {};
+    #labels: Record<string, string> = {};
+    #max = 32;
+    #raf = 0;
+    #observers: { disconnect(): void }[] = [];
+    #mq = matchMedia('(prefers-color-scheme: dark)');
+    #reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    #onScheme = () => this.#refreshColors();
+
+    connectedCallback() {
+      this.#canvas = this.querySelector('canvas')!;
+      this.#ctx = this.#canvas.getContext('2d')!;
+      this.#captions = JSON.parse(this.dataset.captions!);
+      this.#labels = JSON.parse(this.dataset.labels!);
+      this.#max = Number(this.dataset.max);
+      this.querySelectorAll<HTMLButtonElement>('[data-op]').forEach((b) =>
+        b.addEventListener('click', () => this.#op(b.dataset.op!)),
+      );
+      const ro = new ResizeObserver(() => this.#resize());
+      ro.observe(this.#canvas);
+      const mo = new MutationObserver(() => this.#refreshColors());
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      this.#observers.push(ro, mo);
+      this.#mq.addEventListener('change', this.#onScheme);
+      this.#refreshColors();
+      this.#updateUi();
+    }
+
+    disconnectedCallback() {
+      this.#observers.forEach((o) => o.disconnect());
+      this.#mq.removeEventListener('change', this.#onScheme);
+      cancelAnimationFrame(this.#raf);
+    }
+
+    /** Resolve tokens (which use light-dark()) to concrete colors via a probe element. */
+    #refreshColors() {
+      const probe = this.querySelector<HTMLElement>('.vg-probe')!;
+      for (const t of COLOR_TOKENS) {
+        probe.style.color = `var(${t})`;
+        this.#colors[t] = getComputedStyle(probe).color;
+      }
+      probe.style.fontFamily = 'var(--font-mono)';
+      this.#mono = getComputedStyle(probe).fontFamily;
+      this.#draw();
+    }
+
+    // ── layout ──────────────────────────────────────────────
+    #geom() {
+      const W = this.#canvas.clientWidth || 600;
+      const pad = 14;
+      const cols = W >= 520 ? 16 : 8;
+      const gap = 4;
+      const cell = Math.min(30, Math.floor((W - 2 * pad - (cols - 1) * gap) / cols));
+      const rows = Math.ceil(this.#max / cols);
+      const slotH = rows * (cell + gap) - gap;
+      const stackH = 76;
+      const heapTop = pad + stackH + 34;
+      const slotGap = 22;
+      const H = heapTop + 2 * slotH + slotGap + pad + 6;
+      return { W, H, pad, cols, gap, cell, slotH, stackH, heapTop, slotGap };
+    }
+
+    #slotY(slot: number) {
+      const g = this.#geom();
+      return g.heapTop + slot * (g.slotH + g.slotGap);
+    }
+
+    #cellPos(slot: number, i: number) {
+      const g = this.#geom();
+      return { x: g.pad + (i % g.cols) * (g.cell + g.gap), y: this.#slotY(slot) + Math.floor(i / g.cols) * (g.cell + g.gap) };
+    }
+
+    #resize() {
+      const g = this.#geom();
+      const dpr = window.devicePixelRatio || 1;
+      this.#canvas.style.height = `${g.H}px`;
+      this.#canvas.width = Math.round(g.W * dpr);
+      this.#canvas.height = Math.round(g.H * dpr);
+      this.#ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.#draw();
+    }
+
+    // ── operations ──────────────────────────────────────────
+    #realloc(newCap: number) {
+      const from = this.#slot;
+      const to = newCap === 0 ? null : 1 - this.#slot;
+      const moved = [...this.#vals];
+      if (newCap > 0 && this.#cap > 0) {
+        this.#reallocs++;
+        this.#copied += moved.length * ELEM;
+      }
+      const hadBuffer = this.#cap > 0;
+      this.#anim = hadBuffer
+        ? { t0: performance.now(), dur: this.#reduced ? 0 : 950, from, to, oldCap: this.#cap, moved }
+        : null;
+      if (to !== null) this.#slot = hadBuffer ? to : this.#slot;
+      this.#cap = newCap;
+    }
+
+    #push(): string | null {
+      if (this.#vals.length >= this.#max) return this.#fmt('full', { max: this.#max });
+      const value = ++this.#counter;
+      let caption = 'push';
+      let vars: Record<string, number> = {};
+      if (this.#vals.length === this.#cap) {
+        const old = this.#cap;
+        const newCap = Math.max(old * 2, 4);
+        vars = { old, new: newCap, bytes: this.#vals.length * ELEM };
+        this.#realloc(newCap);
+        caption = old === 0 ? 'firstAlloc' : 'pushRealloc';
+      }
+      this.#vals.push(value);
+      if (!this.#anim) this.#pulse = { i: this.#vals.length - 1, t0: performance.now() };
+      return this.#fmt(caption, vars);
+    }
+
+    #op(op: string) {
+      let caption: string | null = null;
+      if (this.#anim) this.#anim = null; // finish any running animation instantly
+      switch (op) {
+        case 'push': caption = this.#push(); break;
+        case 'push10': {
+          // a loop of pushes: show the last reallocation that happened, if any
+          let last: string | null = null;
+          for (let k = 0; k < 10; k++) {
+            const before = this.#reallocs;
+            const c = this.#push();
+            if (this.#reallocs !== before || !last || this.#vals.length >= this.#max) last = c;
+            if (this.#vals.length >= this.#max) { last = this.#fmt('full', { max: this.#max }); break; }
+          }
+          // the animation for a batch shows only the final move
+          caption = last;
+          break;
+        }
+        case 'pop':
+          caption = this.#vals.length ? this.#fmt('pop') : this.#fmt('popEmpty');
+          this.#vals.pop();
+          break;
+        case 'shrink': {
+          const len = this.#vals.length;
+          if (len === this.#cap) { caption = this.#fmt('shrinkNoop'); break; }
+          const saved = (this.#cap - len) * ELEM;
+          this.#realloc(len);
+          caption = len === 0 ? this.#fmt('shrinkFree') : this.#fmt('shrink', { saved });
+          break;
+        }
+        case 'clear':
+          this.#vals = [];
+          caption = this.#fmt('clear');
+          break;
+      }
+      if (caption) this.querySelector<HTMLElement>('[data-caption]')!.innerHTML = caption;
+      this.#updateUi();
+      this.#loop();
+    }
+
+    #fmt(key: string, vars: Record<string, number> = {}) {
+      return (this.#captions[key] ?? '').replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''));
+    }
+
+    #updateUi() {
+      const set = (k: string, v: number) => (this.querySelector(`[data-stat="${k}"]`)!.textContent = String(v));
+      set('len', this.#vals.length);
+      set('cap', this.#cap);
+      set('bytes', this.#cap * ELEM);
+      set('reallocs', this.#reallocs);
+      set('copied', this.#copied);
+      (this.querySelector('[data-op="pop"]') as HTMLButtonElement).disabled = false;
+      (this.querySelector('[data-op="push"]') as HTMLButtonElement).disabled = this.#vals.length >= this.#max;
+      (this.querySelector('[data-op="push10"]') as HTMLButtonElement).disabled = this.#vals.length >= this.#max;
+    }
+
+    #loop() {
+      cancelAnimationFrame(this.#raf);
+      const tick = () => {
+        this.#draw();
+        const now = performance.now();
+        const busy = (this.#anim && now - this.#anim.t0 < this.#anim.dur) || (this.#pulse && now - this.#pulse.t0 < 300);
+        if (busy) this.#raf = requestAnimationFrame(tick);
+        else { this.#anim = null; this.#pulse = null; this.#draw(); }
+      };
+      this.#raf = requestAnimationFrame(tick);
+    }
+
+    // ── drawing ─────────────────────────────────────────────
+    #addr(slot: number) {
+      return `0x5581_${(0x2a40 + slot * 0x1c0 + this.#reallocs * 0x40).toString(16)}`;
+    }
+
+    #roundRect(x: number, y: number, w: number, h: number, r: number) {
+      const c = this.#ctx;
+      c.beginPath();
+      c.roundRect(x, y, w, h, r);
+    }
+
+    #drawCell(x: number, y: number, size: number, value: number | null, alpha = 1, scale = 1) {
+      const c = this.#ctx;
+      const C = this.#colors;
+      c.save();
+      c.globalAlpha = alpha;
+      const s = size * scale;
+      const ox = x + (size - s) / 2;
+      const oy = y + (size - s) / 2;
+      this.#roundRect(ox, oy, s, s, 5);
+      if (value === null) {
+        c.setLineDash([3, 3]);
+        c.strokeStyle = C['--border-strong']!;
+        c.stroke();
+      } else {
+        c.fillStyle = C['--heap']!;
+        c.globalAlpha = alpha * 0.16;
+        c.fill();
+        c.globalAlpha = alpha;
+        c.strokeStyle = C['--heap']!;
+        c.lineWidth = 1.2;
+        c.stroke();
+        if (size >= 18) {
+          c.fillStyle = C['--text']!;
+          c.font = `600 ${Math.round(size * 0.4)}px ${this.#mono}`;
+          c.textAlign = 'center';
+          c.textBaseline = 'middle';
+          c.fillText(String(value), x + size / 2, y + size / 2 + 1);
+        }
+      }
+      c.restore();
+    }
+
+    #drawBuffer(slot: number, cap: number, vals: (number | null)[], alpha = 1) {
+      for (let i = 0; i < cap; i++) {
+        const p = this.#cellPos(slot, i);
+        this.#drawCell(p.x, p.y, this.#geom().cell, vals[i] ?? null, alpha);
+      }
+    }
+
+    #draw() {
+      const c = this.#ctx;
+      const C = this.#colors;
+      if (!c || !C['--text']) return;
+      const g = this.#geom();
+      c.clearRect(0, 0, g.W, g.H);
+      const now = performance.now();
+      const anim = this.#anim;
+      const p = anim ? (anim.dur ? (now - anim.t0) / anim.dur : 1) : 1;
+
+      // labels
+      c.font = `700 10px ${this.#mono}`;
+      c.textBaseline = 'alphabetic';
+      c.textAlign = 'left';
+      c.fillStyle = C['--stack']!;
+      c.fillText(this.#labels.stack!, g.pad, g.pad + 2);
+      c.fillStyle = C['--heap']!;
+      c.textAlign = 'right';
+      c.fillText(this.#labels.heap!, g.W - g.pad, g.heapTop - 12);
+      c.textAlign = 'left';
+
+      // heap region
+      this.#roundRect(g.pad - 6, g.heapTop - 6, g.W - 2 * g.pad + 12, 2 * g.slotH + g.slotGap + 12, 10);
+      c.save();
+      c.setLineDash([2, 4]);
+      c.strokeStyle = C['--border']!;
+      c.stroke();
+      c.restore();
+
+      // stack triple
+      const sw = Math.min(250, g.W - 2 * g.pad);
+      const sy = g.pad + 10;
+      this.#roundRect(g.pad, sy, sw, g.stackH - 10, 8);
+      c.fillStyle = C['--surface']!;
+      c.fill();
+      c.strokeStyle = C['--stack']!;
+      c.lineWidth = 1.4;
+      c.stroke();
+      const ptrText = this.#cap === 0 ? '0x4 (dangling)' : this.#addr(this.#slot);
+      const rowsTxt: [string, string][] = [['ptr', ptrText], ['len', String(this.#vals.length)], ['cap', String(this.#cap)]];
+      c.font = `12px ${this.#mono}`;
+      rowsTxt.forEach(([k, v], i) => {
+        const y = sy + 20 + i * 19;
+        c.textAlign = 'left';
+        c.fillStyle = C['--text-muted']!;
+        c.fillText(k, g.pad + 12, y);
+        c.textAlign = 'right';
+        c.fillStyle = C['--text']!;
+        c.fillText(v, g.pad + sw - 12, y);
+      });
+
+      // pointer arrow (to the live buffer, after the animation settles)
+      const targetSlot = anim && p < 0.75 ? anim.from : this.#slot;
+      const showArrow = this.#cap > 0 || (anim && p < 0.75);
+      if (showArrow) {
+        // straight down from the ptr field to the first cell of the buffer
+        const end = this.#cellPos(targetSlot, 0);
+        const sx = g.pad + 52;
+        const sy2 = sy + g.stackH - 10;
+        const ex = end.x + g.cell / 2;
+        const ey = end.y - 3;
+        c.save();
+        c.strokeStyle = C['--accent']!;
+        c.fillStyle = C['--accent']!;
+        c.lineWidth = 2;
+        c.beginPath();
+        c.arc(sx, sy + 16, 3, 0, Math.PI * 2);
+        c.fill();
+        c.beginPath();
+        c.moveTo(sx, sy + 16);
+        c.lineTo(sx, sy2 + 4);
+        c.bezierCurveTo(sx, (sy2 + ey) / 2, ex, (sy2 + ey) / 2, ex, ey - 6);
+        c.stroke();
+        c.beginPath();
+        c.moveTo(ex, ey + 1);
+        c.lineTo(ex - 4.5, ey - 7);
+        c.lineTo(ex + 4.5, ey - 7);
+        c.closePath();
+        c.fill();
+        c.restore();
+      }
+
+      if (!anim) {
+        if (this.#cap > 0) {
+          this.#drawBuffer(this.#slot, this.#cap, this.#vals);
+          if (this.#pulse) {
+            const t = (now - this.#pulse.t0) / 300;
+            const pos = this.#cellPos(this.#slot, this.#pulse.i);
+            c.clearRect(pos.x - 3, pos.y - 3, g.cell + 6, g.cell + 6);
+            this.#drawCell(pos.x, pos.y, g.cell, this.#vals[this.#pulse.i] ?? null, 1, 0.4 + 0.6 * ease(t * 1.4));
+          }
+        }
+        return;
+      }
+
+      // reallocation: old buffer fades out, new one appears, values fly across
+      const oldAlpha = p < 0.6 ? 1 : Math.max(0, 1 - (p - 0.6) / 0.4);
+      this.#drawBuffer(anim.from, anim.oldCap, anim.moved.map(() => null), oldAlpha * 0.9);
+      if (p > 0.55 && oldAlpha > 0) {
+        const o = this.#cellPos(anim.from, 0);
+        c.save();
+        c.globalAlpha = Math.min(1, (p - 0.55) * 4) * oldAlpha;
+        c.font = `600 11px ${this.#mono}`;
+        c.fillStyle = C['--danger']!;
+        c.textAlign = 'right';
+        c.fillText(this.#labels.freed!, g.W - g.pad, o.y - 8);
+        c.restore();
+      }
+      if (anim.to !== null) {
+        c.save();
+        c.globalAlpha = Math.min(1, p * 3);
+        this.#drawBuffer(anim.to, this.#cap, [], Math.min(1, p * 3));
+        c.restore();
+        anim.moved.forEach((v, i) => {
+          const q = ease((p - 0.12 - i * 0.012) / 0.5);
+          const a = this.#cellPos(anim.from, i);
+          const b = this.#cellPos(anim.to!, i);
+          const lift = Math.sin(q * Math.PI) * 18;
+          this.#drawCell(a.x + (b.x - a.x) * q, a.y + (b.y - a.y) * q - lift, g.cell, v);
+        });
+        // elements pushed into the new buffer pop in once the move is done
+        if (p > 0.8) {
+          for (let i = anim.moved.length; i < this.#vals.length; i++) {
+            const pos = this.#cellPos(anim.to, i);
+            this.#drawCell(pos.x, pos.y, g.cell, this.#vals[i]!, 1, 0.4 + 0.6 * ease((p - 0.8) / 0.2));
+          }
+        }
+      } else {
+        // values still in the old buffer while it is freed
+        anim.moved.forEach((v, i) => {
+          const a = this.#cellPos(anim.from, i);
+          this.#drawCell(a.x, a.y, g.cell, v, oldAlpha);
+        });
+      }
+    }
+  }
+  customElements.define('vec-growth', VecGrowth);
+</script>
+
+<style>
+  vec-growth { display: block; }
+  .widget-controls code { font-size: 0.78rem; color: inherit; background: none; border: 0; padding: 0; }
+  canvas { display: block; inline-size: 100%; }
+  .vg-stats {
+    display: grid; gap: var(--space-2); margin: 0;
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+    & div { padding: var(--space-2) var(--space-3); border-radius: var(--radius-s); background: var(--surface-2); border: 1px solid var(--border); }
+    & dt { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+    & dd { margin: 0; font: 600 1.05rem var(--font-mono); color: var(--text); font-variant-numeric: tabular-nums; }
+  }
+  .vg-probe { position: absolute; inline-size: 0; block-size: 0; overflow: hidden; pointer-events: none; }
+  [data-caption] :global(strong) { color: var(--text); }
+</style>

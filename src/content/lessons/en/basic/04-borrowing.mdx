@@ -1,0 +1,197 @@
+---
+title: Borrowing and references
+description: Using values without owning them, the "aliasing XOR mutability" rule, non-lexical lifetimes and why whole classes of bugs cannot compile.
+duration: 25
+tags: [references, "&mut", borrow checker, NLL, slices]
+---
+
+Moving ownership in and out of every function would be unbearable. Most code only needs to *look at* a value, or change it briefly, and then hand it back. That is what **references** are for: you **borrow** a value, and the owner keeps it. The compiler component that checks borrows, the *borrow checker*, enforces one simple rule that turns out to rule out data races, iterator invalidation and dangling pointers at once.
+
+## Shared references: `&T`
+
+`&value` creates a shared reference. The function receives a pointer, the caller keeps ownership, and nothing is copied or freed.
+
+```rust
+fn count_words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
+let title = String::from("The Rust Programming Language");
+let n = count_words(&title);     // borrow
+println!("{title} has {n} words"); // title is still ours
+```
+
+Through a `&T` you can read but not modify. You can create as many shared references as you like at the same time: readers do not interfere with each other.
+
+## Mutable references: `&mut T`
+
+To modify a borrowed value you need an exclusive reference, `&mut T`. Both the binding and the borrow must be explicitly mutable, and the call site says `&mut`, so mutation is visible where it happens, not only in the function signature.
+
+<Playground title="Reading and writing through references">
+```rust
+fn total(values: &[i32]) -> i32 {
+    values.iter().sum()
+}
+
+fn double_all(values: &mut Vec<i32>) {
+    for v in values.iter_mut() {
+        *v *= 2; // * dereferences to reach the integer
+    }
+    values.push(0);
+}
+
+fn main() {
+    let mut data = vec![1, 2, 3];
+    println!("total = {}", total(&data));
+
+    double_all(&mut data); // explicit at the call site
+    println!("{data:?}, total = {}", total(&data));
+}
+```
+</Playground>
+
+Note that `total` accepts `&[i32]`, a slice, and we pass `&data`, a `&Vec<i32>`. The compiler converts automatically (*deref coercion*), so functions that only read should take slices and `&str` rather than `&Vec<T>` and `&String`: they then work with arrays, vectors and parts of them.
+
+## The rule: aliasing XOR mutability
+
+At any point in the program, for a given value you may have **either**:
+
+- any number of shared references `&T`, **or**
+- exactly one mutable reference `&mut T`,
+
+and never both. And while any borrow is active, the owner itself cannot move or modify the value.
+
+Explore the four scenarios below. Each bar is a borrow, alive from where it is created to where it is **last used**.
+
+<BorrowTimeline />
+
+Why is this rule worth the friction? Because almost every memory bug involving aliasing is a case of *someone modifying data while someone else holds a pointer into it*. Scenario 2 is the canonical example:
+
+<Playground title="Reading while writing" expectError>
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let first = &v[0];
+    v.push(4); // may reallocate the buffer `first` points into
+    println!("first = {first}");
+}
+```
+</Playground>
+
+`push` may need more capacity, in which case it allocates a bigger buffer, copies the elements and frees the old one. `first` would then point to freed memory. In C++ the equivalent code with `std::vector` compiles and is undefined behaviour. Rust reports `cannot borrow v as mutable because it is also borrowed as immutable`. Move the `println!` above the `push` and it compiles.
+
+<Callout type="runtime">
+References are plain machine pointers, with no reference count, no lock and no runtime bookkeeping: the borrow checker runs at compile time on MIR and then disappears. As a bonus, the guarantee that a `&mut T` is never aliased lets rustc tell LLVM that the pointer is `noalias`, which unlocks optimizations that C compilers can only apply when you promise `restrict`.
+</Callout>
+
+## Non-lexical lifetimes
+
+A borrow lasts until its **last use**, not until the end of the enclosing block. This is called *non-lexical lifetimes* (NLL), and it has been the default since Rust 2018. Scenario 4 in the timeline shows it: `r1` stops being used on line 3, so a new borrow on line 4 is fine even though `r1` is still syntactically in scope.
+
+In practice this means you can often fix a borrow error by *reordering* code: finish using the shared reference, then mutate. If you meet older blog posts with odd extra `{ }` blocks around borrows, that is a pre-2018 workaround that is rarely needed now.
+
+## Iterator invalidation, ruled out
+
+Modifying a collection while iterating over it is a classic bug in every language. What differs is when you find out.
+
+<Compare left="Java">
+```java
+List<Integer> v = new ArrayList<>(List.of(1, 2, 3));
+for (Integer x : v) {
+    if (x == 2) v.add(20);
+}
+// runtime: ConcurrentModificationException
+// (C++: undefined behaviour, no message at all)
+```
+
+```rust
+let mut v = vec![1, 2, 3];
+for x in &v {
+    if *x == 2 { v.push(20); }
+}
+// compile time: cannot borrow `v` as mutable
+// because it is also borrowed as immutable
+```
+</Compare>
+
+The `for` loop holds a shared borrow of `v` for its whole duration, so `push` cannot get the exclusive borrow it needs. Java detects it at runtime with a modification counter that every `ArrayList` carries; C++ does not detect it at all. Rust needs no counter, because the program never gets built. The fix is to make the two phases explicit:
+
+<Playground title="Collect first, then mutate">
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+
+    // 1. read: compute what to add (shared borrow ends here)
+    let extra: Vec<i32> = v.iter().filter(|&&x| x % 2 == 1).map(|x| x * 10).collect();
+
+    // 2. write: now an exclusive borrow is allowed
+    v.extend(extra);
+    println!("{v:?}");
+
+    // or mutate in place, element by element, through &mut
+    for x in v.iter_mut() {
+        *x += 1;
+    }
+    println!("{v:?}");
+}
+```
+</Playground>
+
+## No dangling references
+
+A reference can never outlive the value it points to. The simplest attempt to create a dangling pointer does not even get past the signature:
+
+```rust
+fn dangle() -> &String {
+    let s = String::from("hello");
+    &s // s is dropped at the end of this function
+}
+// error[E0106]: missing lifetime specifier
+// help: this function's return type contains a borrowed value,
+//       but there is no value for it to be borrowed from
+```
+
+A function that creates a value cannot return a reference to it: return the owned `String` instead, and let the caller own it. The general mechanism behind this check, **lifetimes**, is the subject of a lesson in the intermediate track; for now remember that a returned reference must point into one of the inputs.
+
+<Callout type="compare" from="Go">
+Go's escape analysis silently moves `s` to the heap so that `&s` stays valid, and the garbage collector frees it later. Rust never changes where a value lives behind your back: it rejects the reference and asks you to decide who owns the data.
+</Callout>
+
+## Slices: borrowing part of a collection
+
+A **slice** is a reference to a contiguous range of elements: `&[T]` for arrays and vectors, `&str` for strings. It is a *fat pointer*: an address plus a length, 16 bytes on 64-bit targets.
+
+<Playground title="Slices are borrows too">
+```rust
+fn first_word(s: &str) -> &str {
+    match s.find(' ') {
+        Some(i) => &s[..i],
+        None => s,
+    }
+}
+
+fn main() {
+    let mut sentence = String::from("borrow checker friendly");
+    let word = first_word(&sentence); // borrows part of `sentence`
+    println!("first word: {word}");
+
+    let scores = [90, 72, 85, 60];
+    let middle = &scores[1..3];       // &[i32] of length 2
+    println!("{middle:?}, len {}", middle.len());
+
+    sentence.clear(); // fine: `word` is no longer used
+    println!("now: {sentence:?}");
+}
+```
+</Playground>
+
+Because `word` borrows from `sentence`, calling `sentence.clear()` *while `word` is still in use* would be rejected: a slice can never observe its source being truncated underneath it. Try moving the first `println!` below `clear()` to see the error. String slicing works on **byte** offsets and panics if you cut in the middle of a multi-byte UTF-8 character, so prefer methods like `find`, `split` and `char_indices` over hand-computed indices.
+
+## Key takeaways
+
+- `&T` borrows for reading, `&mut T` borrows exclusively for writing; the owner keeps the value.
+- Aliasing XOR mutability: many readers or one writer, never both at once.
+- A borrow lasts until its last use (NLL); reordering code is often the fix.
+- Iterator invalidation, use-after-free through references and dangling pointers are compile errors.
+- Accept `&str` and `&[T]` in functions that only read: slices are fat pointers into someone else's data.
+- All of this costs nothing at runtime: references are plain pointers.

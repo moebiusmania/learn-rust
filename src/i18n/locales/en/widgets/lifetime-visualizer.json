@@ -1,0 +1,14 @@
+{
+  "title": "Scopes and borrows",
+  "subtitle": "Each bar is how long a value lives or how long a borrow must stay valid",
+  "presets": [
+    { "label": "Valid", "text": "<code>s</code> lives until the end of <code>main</code>. The borrow <code>r</code> is last used on line 4, well inside that region: the compiler is satisfied." },
+    { "label": "Dangling", "text": "<code>x</code> is dropped at the end of the inner block (line 6), but <code>r</code> is still used on line 7. The red part of the borrow outlives its referent." },
+    { "label": "longest()", "text": "<code>'a</code> must fit inside <em>both</em> inputs. <code>b</code> is dropped at the end of the block (line 11), yet <code>res</code> (which carries <code>'a</code>) is used on line 12." }
+  ],
+  "legendValue": "value alive",
+  "legendBorrow": "borrow needed",
+  "legendInvalid": "outlives referent",
+  "ok": "Compiles",
+  "hover": "Hover or focus a bar to highlight its lines."
+}

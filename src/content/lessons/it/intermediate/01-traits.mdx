@@ -1,0 +1,254 @@
+---
+title: Trait e comportamento condiviso
+description: Come Rust condivide il comportamento senza classi né ereditarietà, quali trait std si aspetta che tu implementi e la orphan rule che tiene tutto coerente.
+duration: 20
+tags: [trait, derive, orphan rule, tipi associati]
+---
+
+Rust non ha classi, non ha ereditarietà e non ha gerarchie di sottotipi. I dati vivono in `struct` ed `enum`; il comportamento si aggancia a essi tramite i **trait**. Un trait è un insieme di metodi, con un nome, che un tipo promette di fornire. Se ti ricorda un'interfaccia, in buona parte lo è, ma con tre differenze che cambiano il modo di progettare il codice: le implementazioni vivono *fuori* dalla definizione del tipo, i trait si possono implementare per tipi che non hai scritto tu, e il compilatore applica una regola globale su chi può scrivere quale implementazione.
+
+## Definire e implementare un trait
+
+Un trait dichiara firme di metodi. Può anche fornire **metodi di default** costruiti sopra quelli obbligatori. Ogni blocco `impl Trait for Tipo` è separato dal tipo stesso, quindi un tipo può implementare un numero qualsiasi di trait, aggiunti nel tempo, anche in altri moduli.
+
+<Playground title="traits.rs">
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+    fn name(&self) -> String;
+
+    // Metodo di default: gli implementatori lo ottengono gratis e possono ridefinirlo.
+    fn describe(&self) -> String {
+        format!("{} con area {:.2}", self.name(), self.area())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Circle { radius: f64 }
+
+#[derive(Debug, Clone, PartialEq)]
+struct Rect { w: f64, h: f64 }
+
+impl Shape for Circle {
+    fn area(&self) -> f64 { std::f64::consts::PI * self.radius * self.radius }
+    fn name(&self) -> String { "cerchio".into() }
+}
+
+impl Shape for Rect {
+    fn area(&self) -> f64 { self.w * self.h }
+    fn name(&self) -> String { "rettangolo".into() }
+    fn describe(&self) -> String {
+        format!("rettangolo {}x{}", self.w, self.h)
+    }
+}
+
+fn main() {
+    let c = Circle { radius: 1.5 };
+    let r = Rect { w: 2.0, h: 3.0 };
+    println!("{}", c.describe());
+    println!("{}", r.describe());
+
+    // Forniti da #[derive]
+    let c2 = c.clone();
+    println!("{:?} == {:?}: {}", c, c2, c == c2);
+}
+```
+</Playground>
+
+I metodi ricevono `self` in modo esplicito, e il *tipo* di `self` fa parte del contratto: `&self` prende in prestito, `&mut self` prende in prestito in modo mutabile, `self` consuma il valore. Un metodo che riceve `self` per valore può essere chiamato una sola volta su un dato valore: è così che API come i builder o `into_iter` esprimono "questo consuma il valore".
+
+<Compare left="Java">
+```java
+interface Shape {
+    double area();
+    default String describe() {
+        return "area " + area();
+    }
+}
+
+// L'elenco delle interfacce è fissato nella dichiarazione
+class Circle implements Shape {
+    double radius;
+    public double area() { return Math.PI * radius * radius; }
+}
+```
+
+```rust
+trait Shape {
+    fn area(&self) -> f64;
+    fn describe(&self) -> String {
+        format!("area {}", self.area())
+    }
+}
+
+struct Circle { radius: f64 }
+
+// Le implementazioni si possono aggiungere dopo, altrove
+impl Shape for Circle {
+    fn area(&self) -> f64 { 3.14159 * self.radius * self.radius }
+}
+```
+</Compare>
+
+Rispetto a TypeScript e Go, i trait di Rust sono **nominali**: avere un metodo chiamato `area` non basta, il tipo deve dichiarare esplicitamente `impl Shape`. L'intenzione diventa visibile e si evitano conformità accidentali, al prezzo di qualche riga in più.
+
+## Derive: implementazioni scritte per te
+
+Molti trait di std hanno un'implementazione ovvia che dipende solo dai campi del tipo. `#[derive(...)]` chiede al compilatore di generarla:
+
+| Trait | Cosa ottieni | Equivalente tipico |
+| --- | --- | --- |
+| `Debug` | formattazione `{:?}` | `toString()` per i log, `__repr__` |
+| `Clone` | copia profonda esplicita con `.clone()` | costruttori di copia |
+| `Copy` | copia implicita bit a bit (solo per tipi che stanno sullo stack) | value type in C# |
+| `PartialEq`, `Eq` | `==` e `!=` | `equals()`, `__eq__` |
+| `PartialOrd`, `Ord` | `<`, `>`, ordinamento | `Comparable` |
+| `Hash` | utilizzabile come chiave di `HashMap` | `hashCode()` |
+| `Default` | `Tipo::default()` con valori nulli | costruttori senza argomenti |
+
+I derive sono generazione di codice in fase di compilazione (macro procedurali, che vedremo nel percorso avanzato), quindi non costano nulla a runtime. Sono anche **opt-in**: una struct non è confrontabile, clonabile o stampabile finché non lo dici tu. È l'opposto di Java, dove ogni oggetto ha `equals` e `hashCode` che abbiano senso o meno.
+
+## I trait di std che implementerai a mano
+
+Un piccolo gruppo di trait di std forma il vocabolario del Rust idiomatico. Implementarli fa sì che i tuoi tipi si integrino con il linguaggio: formattazione, conversioni e `?` si basano tutti su di essi.
+
+<Playground title="Display, From e Default">
+```rust
+use std::fmt;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct Celsius(f64);
+
+#[derive(Debug, Clone, Copy)]
+struct Fahrenheit(f64);
+
+// Formattazione per l'utente: abilita "{}" e .to_string()
+impl fmt::Display for Celsius {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:.1}°C", self.0)
+    }
+}
+
+// Implementare From ti dà Into gratis (blanket impl in std).
+impl From<Fahrenheit> for Celsius {
+    fn from(t: Fahrenheit) -> Self {
+        Celsius((t.0 - 32.0) * 5.0 / 9.0)
+    }
+}
+
+fn main() {
+    let boiling = Celsius::from(Fahrenheit(212.0));
+    let body: Celsius = Fahrenheit(98.6).into();
+    let zero = Celsius::default();
+
+    println!("{boiling}, {body}, {zero}");
+    println!("debug: {:?}", body);
+    let label: String = boiling.to_string();
+    println!("{} caratteri", label.chars().count());
+}
+```
+</Playground>
+
+Nota che non hai mai implementato `Into` né `ToString`. std contiene **blanket implementation** come "ogni `T` che implementa `Display` implementa anche `ToString`" e "se `U: From<T>` allora `T: Into<U>`". Implementa il trait piccolo e fondamentale, e quelli di comodo arrivano da soli.
+
+<Callout type="tip" title="From è il motore dell'operatore ?">
+Quando `?` propaga un errore, chiama `From::from` su di esso. Implementa `From<io::Error> for MyError` e ogni `io::Error` dentro una funzione che restituisce `Result<T, MyError>` si converte da solo all'uscita. Niente codice di wrapping a ogni chiamata.
+</Callout>
+
+## Tipi associati e parametri generici
+
+Alcuni trait devono parlare di un *altro* tipo. `Iterator` deve dire cosa produce. Ci sono due modi per esprimerlo, e la scelta conta:
+
+- **Tipo associato** (`type Item;`): ogni tipo che implementa il trait ne sceglie esattamente uno. Un `Countdown` produce `u32`, punto. Chi lo usa scrive `Iterator<Item = u32>` e l'inferenza dei tipi conosce sempre la risposta.
+- **Parametro generico** (`trait From<T>`): un tipo può implementare il trait molte volte, una per ogni `T`. `String` implementa `From<&str>`, `From<char>`, `From<Box<str>>` e altri.
+
+<Playground title="Extension trait e tipi associati">
+```rust
+// Un extension trait: nuovi metodi su un tipo che non è tuo.
+trait Parity {
+    fn is_even(&self) -> bool;
+}
+
+impl Parity for i32 {
+    fn is_even(&self) -> bool { self % 2 == 0 }
+}
+
+// Iterator usa un *tipo associato*: un solo Item per tipo che lo implementa.
+struct Countdown { n: u32 }
+
+impl Iterator for Countdown {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> {
+        if self.n == 0 { return None; }
+        self.n -= 1;
+        Some(self.n + 1)
+    }
+}
+
+fn main() {
+    println!("4 è pari: {}", 4.is_even());
+
+    // Implementi un metodo (next) e ottieni gratis circa 70 adattatori.
+    let evens: Vec<u32> = Countdown { n: 10 }
+        .filter(|n| (*n as i32).is_even())
+        .collect();
+    println!("{evens:?}");
+}
+```
+</Playground>
+
+`Iterator` è l'esempio migliore della filosofia dei trait: un solo metodo obbligatorio, `next`, e decine di metodi di default (`map`, `filter`, `sum`, `collect`, ...) costruiti sopra. Agli iteratori dedicheremo a breve un'intera lezione.
+
+La prima metà dello snippet mostra un **extension trait**: `Parity` aggiunge `is_even` a `i32`. A differenza del monkey-patching di JavaScript o Ruby, l'effetto è circoscritto: il metodo esiste solo dove il trait è importato con `use`, e non può entrare in conflitto con l'estensione di un altro crate, perché le chiamate vengono risolte in compilazione verso un trait specifico.
+
+## Coerenza e orphan rule
+
+Se ogni crate potesse implementare qualsiasi trait per qualsiasi tipo, due dipendenze potrebbero scrivere entrambe `impl Display for Vec<u8>`, e il compilatore non avrebbe un criterio sensato per scegliere. Rust lo impedisce con la **coerenza**: per ogni coppia (trait, tipo) esiste al massimo un'implementazione nell'intero programma. La **orphan rule** è il modo in cui questo viene garantito localmente, un crate alla volta:
+
+> Puoi scrivere `impl Trait for Tipo` solo se il trait oppure il tipo è definito nel tuo crate.
+
+Esplora le combinazioni qui sotto. "Locale" significa definito nel crate che stai scrivendo.
+
+<TraitMatrix />
+
+<Playground title="La orphan rule in azione" expectError>
+```rust
+use std::fmt;
+
+struct Point { x: i32, y: i32 }
+
+// Trait esterno (Display) per un tipo esterno (Vec): non consentito.
+impl fmt::Display for Vec<Point> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for p in self {
+            write!(f, "({}, {}) ", p.x, p.y)?;
+        }
+        Ok(())
+    }
+}
+
+fn main() {
+    let pts = vec![Point { x: 1, y: 2 }];
+    println!("{pts}");
+}
+```
+</Playground>
+
+La soluzione standard è il **pattern newtype**: avvolgi il tipo esterno in una tuple struct locale, `struct Points(Vec<Point>);`, e implementi il trait per il wrapper. Il wrapper ha lo stesso layout in memoria del contenuto, quindi a runtime non costa nulla.
+
+<Callout type="runtime">
+I trait sono un concetto della fase di compilazione. Quando chiami `c.describe()` su un `Circle` concreto, il compilatore risolve la chiamata verso una funzione precisa e può metterla inline: nessuna ricerca, nessuna tabella dei metodi, nessuna chiamata virtuale. Un trait produce meccanismi a runtime (una **vtable**) solo quando chiedi esplicitamente il dispatch dinamico con `dyn Trait`, che è l'argomento della prossima lezione.
+</Callout>
+
+<Callout type="compare" from="Go">
+Le interfacce di Go sono soddisfatte implicitamente e verificate quando un valore viene convertito al tipo interfaccia; ogni valore interfaccia è una coppia (tipo, puntatore) con dispatch a runtime. I trait di Rust si dichiarano esplicitamente e, di default, hanno dispatch statico. Il polimorfismo a runtime alla Go lo ottieni solo con `dyn Trait`.
+</Callout>
+
+## Punti chiave
+
+- Un trait è un insieme di metodi che un tipo promette di implementare; le implementazioni sono blocchi `impl` separati, che si possono aggiungere dopo la definizione del tipo.
+- I metodi di default permettono ai trait di offrire API ricche sopra pochi metodi obbligatori (a `Iterator` basta `next`).
+- `#[derive]` genera in compilazione le implementazioni più comuni; nulla viene implementato se non lo scegli tu.
+- Implementa i trait fondamentali di std (`Display`, `From`, `Default`) e le blanket impl ti danno `ToString`, `Into` e altro.
+- I tipi associati significano "uno per implementatore", i parametri generici "potenzialmente molti".
+- La coerenza garantisce una sola implementazione per coppia (trait, tipo); la orphan rule richiede che il trait o il tipo siano locali. Per aggirarla usa un newtype.

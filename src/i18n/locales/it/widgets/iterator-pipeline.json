@@ -1,0 +1,17 @@
+{
+  "title": "Pipeline di iteratori pigri",
+  "subtitle": "I valori vengono estratti uno alla volta lungo tutta la catena",
+  "play": "Avvia",
+  "pause": "Pausa",
+  "step": "Passo",
+  "reset": "Ripristina",
+  "predicate": "filter",
+  "pulled": "estratti dalla sorgente",
+  "collected": "raccolti",
+  "done": "take(3) è soddisfatto: alla sorgente non vengono mai chiesti i valori rimanenti.",
+  "idle": "Non succede nulla finché collect() non inizia a estrarre. Premi Avvia o Passo.",
+  "rejected": "{v} scartato da filter",
+  "mapped": "{v} trasformato in {w}",
+  "taken": "{w} passa take ({n}/3)",
+  "stages": ["source", "filter", "map", "take(3)", "collect"]
+}

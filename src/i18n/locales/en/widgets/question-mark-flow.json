@@ -1,0 +1,21 @@
+{
+  "title": "Following the ? operator",
+  "subtitle": "Choose which call fails, then step through the function",
+  "failLabel": "Failing call",
+  "none": "none",
+  "step": "Step",
+  "reset": "Restart",
+  "play": "Play",
+  "okNode": "Ok(cfg)",
+  "exitNode": "return Err(…)",
+  "errBranch": "Err(e)",
+  "desugarTitle": "What the current ? expands to",
+  "captions": {
+    "start": "The caller invokes <code>load_config</code>. Press Step to follow the value through each <code>?</code>.",
+    "call": "<code>{fn}</code> runs and returns a <code>Result</code>. The <code>?</code> inspects it before anything else happens.",
+    "ok": "<code>{fn}</code> returned <code>Ok</code>: <code>?</code> unwraps the value, binds it, and execution continues on the next line.",
+    "err": "<code>{fn}</code> returned <code>Err(e)</code>: <code>?</code> converts the error with <code>From::from(e)</code> into an <code>AppError</code>…",
+    "returnErr": "…and returns it immediately. The remaining lines never run, and the caller receives <code>Err</code>. No stack unwinding, no exception: just an early return.",
+    "returnOk": "All three calls succeeded, so the function reaches its last expression and returns <code>Ok(cfg)</code> to the caller."
+  }
+}

@@ -1,0 +1,310 @@
+---
+/**
+ * Editable, runnable Rust snippet. Wrap a single ```rust fenced block:
+ *
+ *   <Playground title="Moves" expectError>
+ *   ```rust
+ *   fn main() { … }
+ *   ```
+ *   </Playground>
+ *
+ * Without JavaScript the build-time highlighted block is shown as-is.
+ * With JavaScript it becomes an editor and "Run" compiles it on
+ * play.rust-lang.org (stable channel).
+ */
+import Icon from '@/components/Icon.astro';
+import { getLang, useTranslations } from '@/i18n';
+
+interface Props {
+  title?: string;
+  /** The snippet intentionally fails to compile (teaching compiler errors). */
+  expectError?: boolean;
+  mode?: 'debug' | 'release';
+  edition?: '2015' | '2018' | '2021' | '2024';
+}
+const { title, expectError = false, mode = 'debug', edition = '2024' } = Astro.props;
+const { t } = useTranslations(getLang(Astro));
+const strings = {
+  run: t('playground.run'),
+  running: t('playground.running'),
+  copied: t('playground.copied'),
+  copy: t('playground.copy'),
+  output: t('playground.output'),
+  noOutput: t('playground.noOutput'),
+  compilerOutput: t('playground.compilerOutput'),
+  networkError: t('playground.networkError'),
+};
+---
+<rust-playground
+  class="playground"
+  data-strings={JSON.stringify(strings)}
+  data-mode={mode}
+  data-edition={edition}
+  data-expect-error={expectError ? 'true' : undefined}
+>
+  <div class="pg-head">
+    <span class="pg-label"><Icon name="terminal" size={16} />{title ?? t('playground.label')}</span>
+    <div class="pg-actions">
+      <button type="button" class="pg-btn" data-action="copy" title={t('playground.copy')}>
+        <Icon name="copy" size={15} /><span class="sr-only">{t('playground.copy')}</span>
+      </button>
+      <button type="button" class="pg-btn" data-action="reset" title={t('playground.reset')}>
+        <Icon name="reset" size={15} /><span class="sr-only">{t('playground.reset')}</span>
+      </button>
+      <button type="button" class="btn btn-sm pg-run" data-action="run">
+        <Icon name="play" size={14} /><span class="pg-run-label">{t('playground.run')}</span>
+      </button>
+    </div>
+  </div>
+  <div class="pg-source"><slot /></div>
+  <p class="pg-hint">{expectError ? t('playground.expectError') : t('playground.editHint')}</p>
+  <div class="pg-output" data-state="idle" aria-live="polite">
+    <div class="pg-output-inner"></div>
+  </div>
+</rust-playground>
+
+<script>
+  import { highlightRust } from '@/scripts/rust-highlight';
+
+  const NOISE = /^\s*(Compiling playground|Finished `|Running `target)/;
+
+  class RustPlayground extends HTMLElement {
+    #original = '';
+    #textarea!: HTMLTextAreaElement;
+    #hl!: HTMLElement;
+    #output!: HTMLElement;
+    #strings: Record<string, string> = {};
+    #controller: AbortController | null = null;
+
+    connectedCallback() {
+      const pre = this.querySelector<HTMLPreElement>('.pg-source pre');
+      if (!pre || this.#textarea) return;
+      this.#strings = JSON.parse(this.dataset.strings ?? '{}');
+      this.#original = (pre.textContent ?? '').replace(/\n+$/, '');
+      this.#output = this.querySelector('.pg-output-inner')!;
+
+      const editor = document.createElement('div');
+      editor.className = 'pg-editor';
+      editor.innerHTML = '<pre class="pg-hl" aria-hidden="true"><code></code></pre><textarea spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Rust code"></textarea>';
+      this.#hl = editor.querySelector('code')!;
+      this.#textarea = editor.querySelector('textarea')!;
+      this.#textarea.value = this.#original;
+      pre.replaceWith(editor);
+      this.#render();
+
+      this.#textarea.addEventListener('input', () => this.#render());
+      this.#textarea.addEventListener('keydown', (e) => this.#onKey(e));
+      this.querySelector('[data-action="run"]')!.addEventListener('click', () => this.run());
+      this.querySelector('[data-action="reset"]')!.addEventListener('click', () => this.#reset());
+      this.querySelector('[data-action="copy"]')!.addEventListener('click', (e) => this.#copy(e.currentTarget as HTMLButtonElement));
+      this.classList.add('is-ready');
+    }
+
+    #render() {
+      // trailing space keeps the last empty line measurable
+      this.#hl.innerHTML = highlightRust(this.#textarea.value) + '\n ';
+      this.classList.toggle('is-modified', this.#textarea.value !== this.#original);
+    }
+
+    #insert(text: string) {
+      const ta = this.#textarea;
+      const { selectionStart: s, selectionEnd: e } = ta;
+      ta.setRangeText(text, s, e, 'end');
+      this.#render();
+    }
+
+    #onKey(e: KeyboardEvent) {
+      const ta = this.#textarea;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        this.run();
+      } else if (e.key === 'Tab' && !e.shiftKey) {
+        e.preventDefault();
+        this.#insert('    ');
+      } else if (e.key === 'Enter' && !e.isComposing) {
+        // keep the indentation of the current line, add one level after "{"
+        const before = ta.value.slice(0, ta.selectionStart);
+        const line = before.slice(before.lastIndexOf('\n') + 1);
+        const indent = /^\s*/.exec(line)![0] + (/[{(\[]\s*$/.test(line) ? '    ' : '');
+        e.preventDefault();
+        this.#insert('\n' + indent);
+      } else if (e.key === 'Escape') {
+        ta.blur();
+      }
+    }
+
+    #reset() {
+      this.#textarea.value = this.#original;
+      this.#render();
+      this.#show('idle', '');
+    }
+
+    async #copy(btn: HTMLButtonElement) {
+      try {
+        await navigator.clipboard.writeText(this.#textarea.value);
+        btn.classList.add('is-done');
+        btn.title = this.#strings.copied!;
+        setTimeout(() => { btn.classList.remove('is-done'); btn.title = this.#strings.copy!; }, 1400);
+      } catch { /* clipboard unavailable */ }
+    }
+
+    #show(state: 'idle' | 'running' | 'ok' | 'error', html: string) {
+      const wrap = this.querySelector<HTMLElement>('.pg-output')!;
+      wrap.dataset.state = state;
+      this.#output.innerHTML = html;
+    }
+
+    async run() {
+      const runBtn = this.querySelector<HTMLButtonElement>('[data-action="run"]')!;
+      const label = runBtn.querySelector('.pg-run-label')!;
+      this.#controller?.abort();
+      this.#controller = new AbortController();
+      const timeout = setTimeout(() => this.#controller?.abort(), 45_000);
+      runBtn.disabled = true;
+      label.textContent = this.#strings.running!;
+      this.#show('running', '<div class="pg-spinner" aria-hidden="true"></div>');
+      try {
+        const res = await fetch('https://play.rust-lang.org/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: this.#controller.signal,
+          body: JSON.stringify({
+            channel: 'stable',
+            mode: this.dataset.mode ?? 'debug',
+            edition: this.dataset.edition ?? '2024',
+            crateType: 'bin',
+            tests: false,
+            backtrace: false,
+            code: this.#textarea.value,
+          }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const data: { success: boolean; stdout: string; stderr: string; exitDetail?: string } = await res.json();
+        const stderr = data.stderr.split('\n').filter((l) => !NOISE.test(l)).join('\n').trim();
+        const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        let html = '';
+        if (data.stdout) html += `<div class="pg-block"><span class="pg-tag">${this.#strings.output}</span><pre>${esc(data.stdout)}</pre></div>`;
+        if (stderr) html += `<div class="pg-block pg-stderr"><span class="pg-tag">${this.#strings.compilerOutput}</span><pre>${esc(stderr)}</pre></div>`;
+        if (!html) html = `<div class="pg-block"><span class="pg-tag">${this.#strings.output}</span><pre class="muted">${this.#strings.noOutput}</pre></div>`;
+        this.#show(data.success ? 'ok' : 'error', html);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError' && !runBtn.disabled) return;
+        this.#show('error', `<div class="pg-block pg-stderr"><pre>${this.#strings.networkError}</pre></div>`);
+      } finally {
+        clearTimeout(timeout);
+        runBtn.disabled = false;
+        label.textContent = this.#strings.run!;
+      }
+    }
+  }
+
+  customElements.define('rust-playground', RustPlayground);
+</script>
+
+<style>
+  .playground {
+    display: block;
+    container-type: inline-size;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-l);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: clip;
+    transition: border-color var(--dur), box-shadow var(--dur);
+    &:focus-within { border-color: color-mix(in oklch, var(--accent) 60%, var(--border)); box-shadow: var(--shadow), 0 0 0 4px var(--accent-soft); }
+  }
+  .pg-head {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+    border-block-end: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  }
+  .pg-label {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-size: 0.8rem; font-weight: 600; color: var(--text-muted);
+    & svg { color: var(--accent); }
+  }
+  .pg-actions { display: flex; align-items: center; gap: var(--space-1); }
+  .pg-btn {
+    display: inline-grid; place-items: center; inline-size: 2rem; block-size: 2rem;
+    border: 0; border-radius: var(--radius-s); background: transparent; color: var(--text-muted);
+    transition: background-color var(--dur), color var(--dur);
+    &:hover { background: var(--surface-3); color: var(--text); }
+    &:global(.is-done) { color: var(--ok); }
+  }
+  [data-action='reset'] { opacity: 0.35; pointer-events: none; transition: opacity var(--dur); }
+  .playground:global(.is-modified) [data-action='reset'] { opacity: 1; pointer-events: auto; }
+  .playground:not(:global(.is-ready)) :is([data-action], .pg-hint) { display: none; }
+
+  .pg-source :global(pre.astro-code) { border: 0; border-radius: 0; margin: 0; }
+
+  /* overlay editor: highlighted <pre> behind a transparent <textarea> */
+  .pg-source :global(.pg-editor) {
+    display: grid;
+    background: var(--code-bg);
+    font-family: var(--font-mono);
+    font-size: 0.86rem;
+    line-height: 1.6;
+    tab-size: 4;
+    max-block-size: 34rem;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+  .pg-source :global(.pg-editor > *) {
+    grid-area: 1 / 1;
+    margin: 0;
+    padding: var(--space-4) var(--space-5);
+    font: inherit;
+    letter-spacing: normal;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    border: 0;
+  }
+  .pg-source :global(.pg-editor textarea) {
+    resize: none; overflow: hidden; background: transparent; color: transparent;
+    caret-color: var(--accent); outline: none;
+  }
+  .pg-source :global(.pg-editor textarea::selection) { background: color-mix(in oklch, var(--accent) 28%, transparent); color: transparent; }
+  .pg-source :global(.pg-hl) { pointer-events: none; color: var(--text); }
+
+  .pg-hint {
+    margin: 0; padding: var(--space-2) var(--space-4);
+    font-size: 0.75rem; color: var(--text-faint);
+    border-block-start: 1px dashed var(--border);
+    [data-expect-error] & { color: color-mix(in oklch, var(--warn) 80%, var(--text)); }
+  }
+
+  /* output panel animates open with the 0fr → 1fr grid trick */
+  .pg-output {
+    display: grid; grid-template-rows: 0fr;
+    transition: grid-template-rows 360ms var(--ease-out);
+    &:not([data-state='idle']) { grid-template-rows: 1fr; }
+  }
+  .pg-output-inner { overflow: hidden; min-block-size: 0; }
+  .pg-output:not([data-state='idle']) .pg-output-inner {
+    border-block-start: 1px solid var(--border);
+    padding: var(--space-3) var(--space-4) var(--space-4);
+    background: var(--surface-2);
+  }
+  .pg-output[data-state='ok'] .pg-output-inner { box-shadow: inset 3px 0 0 var(--ok); }
+  .pg-output[data-state='error'] .pg-output-inner { box-shadow: inset 3px 0 0 var(--danger); }
+  .pg-output :global(.pg-block + .pg-block) { margin-block-start: var(--space-3); }
+  .pg-output :global(.pg-tag) {
+    display: inline-block; margin-block-end: var(--space-1);
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint);
+  }
+  .pg-output :global(pre) {
+    margin: 0; font-size: 0.8rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+    max-block-size: 22rem; overflow-y: auto;
+  }
+  .pg-output :global(.pg-stderr pre) { color: color-mix(in oklch, var(--danger) 70%, var(--text)); }
+  .pg-output[data-state='ok'] :global(.pg-stderr pre) { color: var(--text-muted); }
+  .pg-output :global(.pg-spinner) {
+    inline-size: 1.4rem; block-size: 1.4rem; margin: var(--space-2) auto;
+    border-radius: 50%;
+    background: conic-gradient(from var(--angle), transparent 20%, var(--accent));
+    mask: radial-gradient(circle, transparent 52%, #000 56%);
+    animation: spin 900ms linear infinite;
+  }
+  @keyframes spin { to { --angle: 360deg; } }
+</style>

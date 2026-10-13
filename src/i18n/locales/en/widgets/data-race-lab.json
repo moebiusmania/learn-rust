@@ -1,0 +1,23 @@
+{
+  "title": "Data race lab",
+  "subtitle": "N threads increment one shared counter K times each",
+  "modes": { "race": "Unsynchronized", "mutex": "Mutex", "atomic": "AtomicUsize" },
+  "threads": "Threads",
+  "increments": "Increments per thread",
+  "run": "Run",
+  "reset": "Reset",
+  "expected": "Expected",
+  "actual": "Actual",
+  "lost": "Lost updates",
+  "counter": "counter",
+  "waiting": "waiting for lock",
+  "read": "read",
+  "write": "write",
+  "add": "fetch_add",
+  "captions": {
+    "race": "Each increment is a <code>read</code> followed by a <code>write</code>. When the scheduler switches threads in between, two threads read the same value and one write overwrites the other: an update is <strong>lost</strong>. This is what C, C++, Java or Go let you compile. In Rust this version is rejected before it can ever run:",
+    "mutex": "A thread must hold the lock for the whole read–add–write sequence. The others block until it is released. The result is always correct; the price is contention, visible as threads <strong>waiting</strong>. In Rust the data lives <em>inside</em> the <code>Mutex</code>, so you cannot touch it without locking.",
+    "atomic": "<code>fetch_add</code> performs the read–modify–write as a single indivisible CPU instruction (e.g. <code>lock xadd</code> on x86). No lock, no lost updates, but it only works for simple values such as integers, booleans and pointers."
+  },
+  "compileError": "error[E0499]: cannot borrow `counter` as mutable more than once at a time"
+}

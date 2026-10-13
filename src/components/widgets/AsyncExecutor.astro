@@ -1,0 +1,263 @@
+---
+/**
+ * Step-through visualization of a single-threaded executor driving three
+ * futures: ready queue → poll → Pending + waker in the reactor → wake → …
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string;
+  zones: { queue: string; executor: string; reactor: string };
+  states: string[];
+  task: string; thread: string; idle: string; pending: string; ready: string;
+  prev: string; next: string; play: string; pause: string; reset: string;
+  captions: string[];
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'async-executor');
+const tasks = ['A', 'B', 'C'] as const;
+const pillX = [90, 228, 366, 504];
+const rowY = [172, 204, 236];
+const trackX = 90;
+const trackW = 534;
+const steps = s.captions.length;
+---
+<WidgetFrame
+  tag="async-executor"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="clock"
+  data-play={s.play}
+  data-pause={s.pause}
+  data-pending={s.pending}
+  data-ready={s.ready}
+  data-idle={s.idle}
+>
+  <svg class="ae" viewBox="0 0 640 306" aria-hidden="true">
+    <defs>
+      <marker id="ae-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M0 0 10 5 0 10z" fill="var(--border-strong)" />
+      </marker>
+    </defs>
+    <g class="zones">
+      <rect class="zone" x="12" y="34" width="196" height="110" rx="14" />
+      <rect class="zone zone-exec" x="222" y="34" width="196" height="110" rx="14" />
+      <rect class="zone" x="432" y="34" width="196" height="110" rx="14" />
+      <text x="110" y="24" class="zone-label">{s.zones.queue}</text>
+      <text x="320" y="24" class="zone-label">{s.zones.executor}</text>
+      <text x="530" y="24" class="zone-label">{s.zones.reactor}</text>
+      <path d="M208 89h12" class="flow" marker-end="url(#ae-arrow)" />
+      <path d="M418 89h12" class="flow" marker-end="url(#ae-arrow)" />
+      <path d="M530 144 C 530 160, 110 160, 110 146" class="flow flow-back" marker-end="url(#ae-arrow)" />
+      <text x="320" y="132" class="result" data-result></text>
+    </g>
+
+    {
+      tasks.map((t, i) => (
+        <g class={`row task-${t}`}>
+          <circle cx="18" cy={rowY[i]} r="5" class="dot" />
+          <text x="30" y={rowY[i]! + 4} class="row-label">{s.task} {t}</text>
+          {pillX.slice(0, -1).map((x) => <path d={`M${x + 120} ${rowY[i]}h16`} class="flow" marker-end="url(#ae-arrow)" />)}
+          {s.states.map((st, k) => (
+            <g class="pill" data-task={t} data-state={k}>
+              <rect x={pillX[k]} y={rowY[i]! - 11} width="120" height="22" rx="11" />
+              <text x={pillX[k]! + 60} y={rowY[i]! + 4}>{st}</text>
+            </g>
+          ))}
+        </g>
+      ))
+    }
+
+    <text x="12" y="285" class="row-label">{s.thread}</text>
+    <rect x={trackX} y="272" width={trackW} height="20" rx="6" class="track" />
+    <g data-timeline></g>
+
+    {
+      tasks.map((t) => (
+        <g class={`chip task-${t}`} data-chip={t}>
+          <rect x="-22" y="-17" width="44" height="34" rx="9" />
+          <text y="5">{t}</text>
+          <path class="waker" d="M14 -22a5 5 0 1 1 0.1 0" />
+        </g>
+      ))
+    }
+  </svg>
+
+  <div class="widget-caption" aria-live="polite">
+    {s.captions.map((c, i) => <p data-caption={i} hidden={i !== 0} set:html={c} />)}
+  </div>
+
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm btn-ghost" data-prev disabled><Icon name="prev" size={14} /><span>{s.prev}</span></button>
+    <button type="button" class="btn btn-sm" data-next><span>{s.next}</span><Icon name="next" size={14} /></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-toggle><Icon name="play" size={14} /><span>{s.play}</span></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-reset><Icon name="reset" size={14} /><span>{s.reset}</span></button>
+    <div class="steps-dots" aria-hidden="true" style="margin-inline-start:auto">
+      {Array.from({ length: steps }, (_, i) => <span class={i === 0 ? 'on' : undefined} />)}
+    </div>
+  </div>
+  <div hidden data-geom={JSON.stringify({ trackX, trackW })}></div>
+</WidgetFrame>
+
+<script>
+  type Id = 'A' | 'B' | 'C';
+  interface Step {
+    queue: Id[];
+    reactor: Id[];
+    poll?: Id;
+    result?: 'pending' | 'ready';
+    states: Record<Id, number>;
+    io?: boolean;
+  }
+  // The scripted run. `states` are indexes into Start / await #1 / await #2 / Done.
+  const STEPS: Step[] = [
+    { queue: ['A', 'B', 'C'], reactor: [], states: { A: 0, B: 0, C: 0 } },
+    { queue: ['B', 'C'], reactor: ['A'], poll: 'A', result: 'pending', states: { A: 1, B: 0, C: 0 } },
+    { queue: ['C'], reactor: ['A', 'B'], poll: 'B', result: 'pending', states: { A: 1, B: 1, C: 0 } },
+    { queue: [], reactor: ['A', 'B', 'C'], poll: 'C', result: 'pending', states: { A: 1, B: 1, C: 1 } },
+    { queue: ['B'], reactor: ['A', 'C'], io: true, states: { A: 1, B: 1, C: 1 } },
+    { queue: [], reactor: ['A', 'C', 'B'], poll: 'B', result: 'pending', states: { A: 1, B: 2, C: 1 } },
+    { queue: ['A'], reactor: ['C', 'B'], io: true, states: { A: 1, B: 2, C: 1 } },
+    { queue: [], reactor: ['C', 'B', 'A'], poll: 'A', result: 'pending', states: { A: 2, B: 2, C: 1 } },
+    { queue: ['C', 'B'], reactor: ['A'], io: true, states: { A: 2, B: 2, C: 1 } },
+    { queue: ['B'], reactor: ['A', 'C'], poll: 'C', result: 'pending', states: { A: 2, B: 2, C: 2 } },
+    { queue: [], reactor: ['A', 'C'], poll: 'B', result: 'ready', states: { A: 2, B: 3, C: 2 } },
+    { queue: ['A', 'C'], reactor: [], io: true, states: { A: 2, B: 3, C: 2 } },
+    { queue: ['C'], reactor: [], poll: 'A', result: 'ready', states: { A: 3, B: 3, C: 2 } },
+    { queue: [], reactor: [], poll: 'C', result: 'ready', states: { A: 3, B: 3, C: 3 } },
+  ];
+  const QUEUE_X = [48, 100, 152];
+  const REACTOR_X = [468, 520, 572];
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  class AsyncExecutor extends HTMLElement {
+    #i = 0;
+    #timer: number | undefined;
+
+    connectedCallback() {
+      this.querySelector('[data-next]')!.addEventListener('click', () => { this.stop(); this.go(this.#i + 1); });
+      this.querySelector('[data-prev]')!.addEventListener('click', () => { this.stop(); this.go(this.#i - 1); });
+      this.querySelector('[data-reset]')!.addEventListener('click', () => { this.stop(); this.go(0); });
+      this.querySelector('[data-toggle]')!.addEventListener('click', () => (this.#timer ? this.stop() : this.play()));
+      this.go(0);
+    }
+
+    disconnectedCallback() { this.stop(); }
+
+    go(i: number) {
+      this.#i = Math.max(0, Math.min(STEPS.length - 1, i));
+      const step = STEPS[this.#i]!;
+      (['A', 'B', 'C'] as Id[]).forEach((id) => {
+        const chip = this.querySelector<SVGGElement>(`[data-chip="${id}"]`)!;
+        let x = 320, y = 89, cls = '';
+        if (step.poll === id) cls = 'is-polled';
+        else if (step.queue.includes(id)) x = QUEUE_X[step.queue.indexOf(id)]!;
+        else if (step.reactor.includes(id)) { x = REACTOR_X[step.reactor.indexOf(id)]!; cls = 'is-waiting'; }
+        else { cls = 'is-done'; y = 112; }
+        chip.style.transform = `translate(${x}px, ${y}px)`;
+        chip.setAttribute('class', `chip task-${id} ${cls}`);
+        this.querySelectorAll<SVGGElement>(`.pill[data-task="${id}"]`).forEach((p) => {
+          const k = Number(p.dataset.state);
+          p.classList.toggle('is-current', k === step.states[id]);
+          p.classList.toggle('is-past', k < step.states[id]);
+        });
+      });
+
+      const result = this.querySelector('[data-result]')!;
+      result.textContent = step.result ? `→ ${step.result === 'ready' ? this.dataset.ready : this.dataset.pending}` : '';
+      result.setAttribute('class', `result ${step.result ?? ''}`);
+      this.querySelector('.zone-exec')!.classList.toggle('busy', !!step.poll);
+
+      // timeline: one segment per step taken so far
+      const { trackX, trackW } = JSON.parse(this.querySelector<HTMLElement>('[data-geom]')!.dataset.geom!);
+      const w = trackW / (STEPS.length - 1);
+      const tl = this.querySelector('[data-timeline]')!;
+      tl.replaceChildren();
+      STEPS.slice(1, this.#i + 1).forEach((st, k) => {
+        const r = document.createElementNS(SVG_NS, 'rect');
+        r.setAttribute('x', String(trackX + k * w + 1));
+        r.setAttribute('y', '274');
+        r.setAttribute('width', String(w - 2));
+        r.setAttribute('height', '16');
+        r.setAttribute('rx', '4');
+        r.setAttribute('class', st.poll ? `seg-poll task-${st.poll}` : 'seg-idle');
+        tl.append(r);
+        const t = document.createElementNS(SVG_NS, 'text');
+        t.setAttribute('x', String(trackX + k * w + w / 2));
+        t.setAttribute('y', '286');
+        t.setAttribute('class', 'seg-label');
+        t.textContent = st.poll ?? this.dataset.idle ?? '';
+        tl.append(t);
+      });
+
+      this.querySelectorAll<HTMLElement>('[data-caption]').forEach((p) => (p.hidden = Number(p.dataset.caption) !== this.#i));
+      this.querySelectorAll('.steps-dots span').forEach((d, k) => d.classList.toggle('on', k === this.#i));
+      this.querySelector<HTMLButtonElement>('[data-prev]')!.disabled = this.#i === 0;
+      this.querySelector<HTMLButtonElement>('[data-next]')!.disabled = this.#i === STEPS.length - 1;
+    }
+
+    play() {
+      if (this.#i === STEPS.length - 1) this.go(0);
+      this.#setToggle(true);
+      this.#timer = window.setInterval(() => {
+        if (this.#i >= STEPS.length - 1) return this.stop();
+        this.go(this.#i + 1);
+      }, 2600);
+    }
+
+    stop() {
+      clearInterval(this.#timer);
+      this.#timer = undefined;
+      this.#setToggle(false);
+    }
+
+    #setToggle(playing: boolean) {
+      const btn = this.querySelector('[data-toggle]')!;
+      btn.querySelector('span')!.textContent = playing ? this.dataset.pause! : this.dataset.play!;
+      btn.querySelector('svg')!.innerHTML = playing ? '<path d="M8 5v14M16 5v14"/>' : '<path d="M7 4.5v15l12.5-7.5z"/>';
+    }
+  }
+  customElements.define('async-executor', AsyncExecutor);
+</script>
+
+<style>
+  async-executor { display: block; }
+  .ae { inline-size: 100%; block-size: auto; font-family: var(--font-sans); overflow: visible; }
+  .zone { fill: var(--surface-2); stroke: var(--border); transition: stroke var(--dur), fill var(--dur); }
+  .zone-exec:global(.busy) { stroke: var(--accent); fill: color-mix(in oklch, var(--accent) 7%, var(--surface-2)); }
+  .zone-label { font-size: 12px; font-weight: 650; fill: var(--text-muted); text-anchor: middle; }
+  .flow { fill: none; stroke: var(--border-strong); stroke-width: 1.5; }
+  .flow-back { stroke-dasharray: 4 4; }
+  .result { font: 600 12px var(--font-mono); text-anchor: middle; fill: var(--text-muted); }
+  .result:global(.pending) { fill: var(--warn); }
+  .result:global(.ready) { fill: var(--ok); }
+
+  :global(async-executor .task-A) { --task: var(--accent); }
+  :global(async-executor .task-B) { --task: var(--info); }
+  :global(async-executor .task-C) { --task: var(--violet); }
+
+  .row-label { font-size: 12px; font-weight: 600; fill: var(--text); }
+  .dot { fill: var(--task); }
+  .pill rect { fill: var(--surface); stroke: var(--border); transition: fill var(--dur), stroke var(--dur); }
+  .pill text { font: 11px var(--font-mono); text-anchor: middle; fill: var(--text-faint); transition: fill var(--dur); }
+  .pill:global(.is-past) rect { fill: color-mix(in oklch, var(--task) 10%, var(--surface)); stroke: color-mix(in oklch, var(--task) 35%, var(--border)); }
+  .pill:global(.is-past) text { fill: var(--text-muted); }
+  .pill:global(.is-current) rect { fill: color-mix(in oklch, var(--task) 28%, var(--surface)); stroke: var(--task); stroke-width: 1.5; }
+  .pill:global(.is-current) text { fill: var(--text); font-weight: 700; }
+
+  .chip { transition: transform 700ms var(--ease-out), opacity 400ms; }
+  .chip rect { fill: color-mix(in oklch, var(--task) 22%, var(--surface)); stroke: var(--task); stroke-width: 2; }
+  .chip text { font: 700 15px var(--font-mono); text-anchor: middle; fill: var(--text); }
+  .chip .waker { fill: none; stroke: var(--warn); stroke-width: 2; opacity: 0; transition: opacity var(--dur); }
+  .chip:global(.is-waiting) .waker { opacity: 1; }
+  .chip:global(.is-waiting) rect { stroke-dasharray: 4 3; }
+  .chip:global(.is-polled) rect { filter: drop-shadow(0 0 6px var(--task)); }
+  .chip:global(.is-done) { opacity: 0; }
+
+  .track { fill: var(--surface-2); stroke: var(--border); }
+  :global(async-executor) :global(.seg-poll) { fill: color-mix(in oklch, var(--task) 45%, var(--surface)); }
+  :global(async-executor) :global(.seg-idle) { fill: var(--surface-3); }
+  :global(async-executor) :global(.seg-label) { font: 600 10px var(--font-mono); text-anchor: middle; fill: var(--text); }
+  [data-caption] { margin: 0; }
+</style>

@@ -1,0 +1,23 @@
+{
+  "title": "Linea temporale dei borrow",
+  "subtitle": "Ogni barra è un borrow, vivo dalla creazione all'ultimo utilizzo. Passa sopra una barra per vederne le righe.",
+  "line": "riga",
+  "shared": "condiviso &T",
+  "mut": "esclusivo &mut T",
+  "conflict": "conflitto",
+  "lexical": "scope lessicale (pre-NLL)",
+  "ok": "Compila",
+  "fail": "Non compila",
+  "scenarios": [
+    { "label": "Tanti lettori", "text": "Due borrow condivisi si sovrappongono senza problemi. Entrambi finiscono con l'ultimo utilizzo alla riga 4, quindi <code>v.push</code> alla riga 5 può prendere un borrow esclusivo. Con le vecchie regole lessicali sarebbero rimasti vivi fino alla fine del blocco (tratteggio) e il codice non compilerebbe." },
+    { "label": "Leggi, poi scrivi", "text": "<code>first</code> punta dentro il buffer del vettore. <code>push</code> potrebbe riallocare quel buffer, lasciando <code>first</code> a puntare nel vuoto. Poiché <code>first</code> viene usato di nuovo alla riga 4, il borrow condiviso è ancora vivo quando inizia quello esclusivo." },
+    { "label": "Due scrittori", "text": "Due borrow esclusivi dello stesso valore si sovrappongono alle righe 3–4. Anche con un solo thread, due <code>&mut</code> vivi romperebbero la garanzia che chi ha un <code>&mut</code> non subisca modifiche a sorpresa." },
+    { "label": "NLL all'opera", "text": "<code>r1</code> viene usato per l'ultima volta alla riga 3, quindi il suo borrow finisce lì, non alla parentesi di chiusura. Il borrow condiviso <code>r2</code> inizia dopo: nessuna sovrapposizione, nessun errore. È ciò che ci hanno dato i non-lexical lifetimes (Rust 2018+)." }
+  ],
+  "errors": [
+    "",
+    "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable",
+    "error[E0499]: cannot borrow `s` as mutable more than once at a time",
+    ""
+  ]
+}

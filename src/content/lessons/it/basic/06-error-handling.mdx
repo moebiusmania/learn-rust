@@ -1,0 +1,250 @@
+---
+title: Gestione degli errori senza eccezioni
+description: Panic per i bug, Result per i fallimenti previsti, l'operatore ? per propagarli e come progettare i tipi di errore per librerie e applicazioni.
+duration: 25
+tags: [Result, Option, "operatore ?", panic, trait Error]
+---
+
+Rust non ha eccezioni. Una funzione che può fallire lo dichiara nel suo **tipo di ritorno**, e il chiamante deve fare qualcosa con il fallimento prima di poter accedere al valore. Per circa una settimana sembra prolisso; dopo, la maggior parte degli sviluppatori fa fatica a tornare a non sapere quali chiamate possono lanciare eccezioni.
+
+## Due tipi di fallimento
+
+Rust divide i fallimenti in due categorie e assegna a ciascuna un meccanismo diverso:
+
+| | Errore recuperabile | Bug / invariante violata |
+| --- | --- | --- |
+| Esempi | File non trovato, input utente non valido, timeout di rete | Indice fuori dai limiti, `unwrap()` su `None`, overflow di un intero in debug |
+| Meccanismo | `Result<T, E>` restituito come valore | `panic!`: srotola il thread e si ferma |
+| Visibile nella firma | Sì | No |
+| Compito del chiamante | Gestirlo o propagarlo | Nessuno: va corretto il codice |
+
+<Playground title="Result per i fallimenti previsti, panic per i bug">
+```rust
+use std::num::ParseIntError;
+
+fn parse_port(s: &str) -> Result<u16, ParseIntError> {
+    s.trim().parse::<u16>()
+}
+
+fn main() {
+    for input in ["8080", " 443 ", "http", "70000"] {
+        match parse_port(input) {
+            Ok(port) => println!("{input:?} -> port {port}"),
+            Err(e) => println!("{input:?} -> errore: {e}"),
+        }
+    }
+
+    let v = vec![1, 2, 3];
+    // Quando l'assenza è un caso normale, chiedi un Option...
+    println!("{:?} {:?}", v.get(1), v.get(10));
+    // ...accedere fuori dai limiti è un bug: va in panic.
+    let boom = v[10];
+    println!("irraggiungibile: {boom}");
+}
+```
+</Playground>
+
+Le prime quattro righe sono normale flusso di controllo. L'ultima è un crash con un messaggio chiaro, la posizione nel sorgente e il codice di uscita 101. `unwrap()` ed `expect("perché non può fallire")` trasformano un `None` o un `Err` in un panic: vanno bene nei test, nei prototipi e quando un'invariante garantisce davvero il successo; altrove sono un campanello d'allarme.
+
+<Callout type="runtime" title="Cosa fa davvero un panic">
+Di default un panic **srotola** (unwind) lo stack del thread corrente: ogni valore ancora vivo viene rilasciato in ordine inverso, quindi i file vengono chiusi e i lock rilasciati, poi il thread termina. Se è il thread principale, il processo esce con codice 101. Il panic di un altro thread si può osservare tramite `JoinHandle::join`. Con `panic = "abort"` nel profilo Cargo il processo invece termina subito, il che rende i binari più piccoli ed è comune nel codice embedded. I panic non sono eccezioni: `catch_unwind` esiste per i confini FFI e i thread pool, non per il flusso di controllo.
+</Callout>
+
+## Result e Option sono normali enum
+
+Dietro non c'è alcun meccanismo speciale:
+
+```rust
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+```
+
+Essendo semplici valori puoi memorizzarli, metterli in un `Vec` e trasformarli con dei metodi invece di annidare `match` ovunque. I combinatori più utili:
+
+| Metodo | Su | Cosa fa |
+| --- | --- | --- |
+| `map(f)` | entrambi | Trasforma il valore di successo, conserva il fallimento |
+| `and_then(f)` | entrambi | Concatena un altro passo che può fallire (`flatMap`) |
+| `unwrap_or(v)` / `unwrap_or_default()` | entrambi | Ripiega su un valore |
+| `ok_or(err)` | `Option` | Trasforma `None` in uno specifico `Err` |
+| `ok()` | `Result` | Scarta l'errore, tiene un `Option` |
+| `map_err(f)` | `Result` | Trasforma o arricchisce l'errore |
+
+<Playground title="Combinatori invece di controlli annidati">
+```rust
+fn main() {
+    let config = [("port", "8080"), ("workers", "four"), ("debug", "true")];
+    let lookup = |key: &str| config.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+
+    // Combinatori di Option: niente if/else, niente controlli su null
+    let port: u16 = lookup("port").and_then(|v| v.parse().ok()).unwrap_or(80);
+    let timeout = lookup("timeout").map(|v| v.len()).unwrap_or_default();
+    println!("port={port} timeout={timeout}");
+
+    // Option -> Result con ok_or, poi arricchisci l'errore con map_err
+    let workers: Result<u32, String> = lookup("workers")
+        .ok_or("chiave `workers` mancante".to_string())
+        .and_then(|v| v.parse::<u32>().map_err(|e| format!("workers non valido {v:?}: {e}")));
+    println!("{workers:?}");
+
+    let host: Result<&str, &str> = lookup("host").ok_or("chiave `host` mancante");
+    println!("{host:?}");
+}
+```
+</Playground>
+
+## L'operatore ?
+
+Il più delle volte una funzione non può gestire un errore da sola e vuole passarlo al chiamante. È quello che fa `?`: applicato a un `Result`, estrae il valore `Ok` oppure **ritorna subito** dalla funzione che lo contiene con l'`Err`. Scegli quale chiamata fallisce ed esegui passo passo:
+
+<QuestionMarkFlow />
+
+Due dettagli nascosti in quell'espansione sono importanti:
+
+1. `?` si può usare solo dentro una funzione che a sua volta restituisce `Result` (oppure `Option`, per i valori `Option`). La propagazione è visibile in ogni firma lungo il percorso.
+2. L'errore passa per `From::from` prima di essere restituito. È così che un `ParseIntError` di basso livello diventa il tipo di errore della tua applicazione senza alcuna conversione esplicita nel punto di chiamata.
+
+<Compare left="Go">
+```go
+func loadConfig(path string) (*Config, error) {
+    text, err := readFile(path)
+    if err != nil {
+        return nil, err
+    }
+    raw, err := parseToml(text)
+    if err != nil {
+        return nil, err
+    }
+    return validate(raw)
+}
+```
+
+```rust
+fn load_config(path: &str) -> Result<Config, AppError> {
+    let text = read_file(path)?;
+    let raw = parse_toml(&text)?;
+    let cfg = validate(raw)?;
+    Ok(cfg)
+}
+```
+</Compare>
+
+La semantica è la stessa dei controlli espliciti di Go, con una differenza che conta: in Go puoi dimenticarti di guardare `err` e usare un `text` nil; in Rust `text` non esiste finché il `Result` non è stato aperto.
+
+## Progettare i tipi di errore
+
+Per una libreria, l'errore idiomatico è un **enum** con una variante per ogni modalità di fallimento, che implementa `Display` (il messaggio leggibile), `std::error::Error` (l'interfaccia comune) e `From` per ciascun errore sottostante che vuoi far convertire automaticamente a `?`.
+
+<Playground title="Un enum di errori personalizzato con conversioni From">
+```rust
+use std::fmt;
+use std::num::ParseIntError;
+
+#[derive(Debug)]
+enum ConfigError {
+    Missing(&'static str),
+    BadNumber(ParseIntError),
+    OutOfRange(u32),
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConfigError::Missing(key) => write!(f, "chiave `{key}` mancante"),
+            ConfigError::BadNumber(e) => write!(f, "non è un numero ({e})"),
+            ConfigError::OutOfRange(n) => write!(f, "{n} è fuori da 1..=64"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+// È questa impl a permettere a `?` di trasformare un ParseIntError in un ConfigError
+impl From<ParseIntError> for ConfigError {
+    fn from(e: ParseIntError) -> Self {
+        ConfigError::BadNumber(e)
+    }
+}
+
+fn parse_workers(line: &str) -> Result<u32, ConfigError> {
+    let value = line.strip_prefix("workers=").ok_or(ConfigError::Missing("workers"))?;
+    let n: u32 = value.parse()?; // ParseIntError -> ConfigError tramite From
+    if !(1..=64).contains(&n) {
+        return Err(ConfigError::OutOfRange(n));
+    }
+    Ok(n)
+}
+
+fn main() {
+    for line in ["workers=8", "threads=8", "workers=eight", "workers=512"] {
+        match parse_workers(line) {
+            Ok(n) => println!("{line:<14} ok: {n} workers"),
+            Err(e) => println!("{line:<14} errore: {e}"),
+        }
+    }
+}
+```
+</Playground>
+
+I chiamanti possono fare `match` su `ConfigError` per reagire in modo diverso a una chiave mancante e a un numero non valido. Togli l'implementazione di `From` e il `?` su `value.parse()` smette di compilare, perché il compilatore non sa più come trasformare un tipo di errore nell'altro. Succede la stessa cosa qui, dove l'errore di destinazione è una semplice `String`:
+
+<Playground title="? richiede una conversione From" expectError>
+```rust
+fn double(s: &str) -> Result<i32, String> {
+    let n: i32 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn main() {
+    println!("{:?}", double("21"));
+}
+```
+</Playground>
+
+### `Box<dyn Error>` per le applicazioni
+
+Nel codice applicativo spesso vuoi solo far risalire qualsiasi errore e stamparlo. `Box<dyn Error>` è un tipo "errore qualsiasi" allocato sullo heap: ogni tipo che implementa `Error` vi si converte tramite `?`, e lo stesso vale per un messaggio `&str`. Anche `main` può restituire un `Result`; se restituisce `Err`, Rust stampa la forma `Debug` dell'errore ed esce con codice 1.
+
+<Playground title="Box<dyn Error> e main che restituisce Result">
+```rust
+use std::error::Error;
+
+fn average(csv: &str) -> Result<f64, Box<dyn Error>> {
+    if csv.trim().is_empty() {
+        return Err("input vuoto".into()); // &str -> Box<dyn Error>
+    }
+    let mut total = 0.0;
+    let mut count = 0;
+    for field in csv.split(',') {
+        total += field.trim().parse::<f64>()?; // ParseFloatError, messo in un Box da ?
+        count += 1;
+    }
+    Ok(total / count as f64)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("{:.2}", average("3, 4.5, 6")?);
+    println!("{:.2}", average("1, two, 3")?); // main restituisce questo Err
+    println!("mai stampato");
+    Ok(())
+}
+```
+</Playground>
+
+<Callout type="tip" title="thiserror e anyhow">
+Due crate coprono quasi tutte le esigenze reali. **thiserror** genera il codice ripetitivo di `Display`, `Error` e `From` per un enum di errori di una libreria a partire da attributi come `#[error("missing key {0}")]` e `#[from]`. **anyhow** offre `anyhow::Result<T>`, un `Box<dyn Error>` migliore che permette di aggiungere contesto: `read(path).with_context(|| format!("reading {path}"))?`. La regola pratica: thiserror per le librerie, i cui chiamanti devono fare match sugli errori; anyhow per le applicazioni, che per lo più devono solo segnalarli.
+</Callout>
+
+<Callout type="compare" from="Java / Python">
+Le checked exception di Java cercavano di mettere i fallimenti nelle firme, ma si propagavano implicitamente e non si potevano astrarre in modo generico. In Python e JavaScript le eccezioni sono del tutto invisibili nelle firme. L'approccio di Rust è più vicino ai linguaggi funzionali: gli errori sono valori, la propagazione è esplicita ma lunga un solo carattere, e il sistema dei tipi sa esattamente quali errori possono arrivare in ogni punto.
+</Callout>
+
+## Punti chiave
+
+- Usa `Result<T, E>` per i fallimenti che il chiamante deve gestire; riserva `panic!` a bug e invarianti violate.
+- Un panic srotola lo stack e rilascia i valori uscendo; non è un meccanismo di flusso di controllo.
+- `Option` e `Result` sono normali enum con un ricco insieme di combinatori (`map`, `and_then`, `ok_or`, `unwrap_or`).
+- `?` ritorna subito con l'errore dopo averlo convertito tramite `From`; funziona solo in funzioni che restituiscono `Result` o `Option`.
+- Le librerie espongono enum di errori (spesso generati con thiserror); le applicazioni usano `Box<dyn Error>` o anyhow.

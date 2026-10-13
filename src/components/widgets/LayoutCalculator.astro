@@ -1,0 +1,264 @@
+---
+/**
+ * Build a struct from primitive fields and see its byte layout under
+ * repr(Rust) (current rustc behaviour: sort by decreasing alignment) and
+ * repr(C) (declaration order). Assumes a 64-bit target.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string; add: string; fields: string; remove: string; clear: string; empty: string;
+  size: string; align: string; padding: string; bytes: string; memory: string; pad: string;
+  reprRust: string; reprC: string;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'layout-calculator');
+const palette = ['u8', 'u16', 'u32', 'u64', 'bool', 'char', '&T'];
+const client = { remove: s.remove, empty: s.empty, bytes: s.bytes, pad: s.pad };
+---
+<WidgetFrame tag="layout-calculator" title={s.title} subtitle={s.subtitle} icon="ruler" data-strings={JSON.stringify(client)}>
+  <div class="lc-top">
+    <div class="lc-palette" role="group" aria-label={s.add}>
+      <span class="lc-label">{s.add}</span>
+      <div class="lc-types">
+        {palette.map((t) => <button type="button" class="lc-type" data-add={t}>+ {t}</button>)}
+      </div>
+    </div>
+    <div class="seg" role="group" aria-label="repr">
+      <button type="button" data-repr="rust" aria-pressed="true">repr(Rust)</button>
+      <button type="button" data-repr="c" aria-pressed="false">repr(C)</button>
+    </div>
+  </div>
+
+  <div class="lc-fields-wrap">
+    <span class="lc-label">{s.fields}</span>
+    <ol class="lc-fields" data-fields></ol>
+    <button type="button" class="btn btn-sm btn-ghost lc-clear" data-clear><Icon name="reset" size={13} />{s.clear}</button>
+  </div>
+
+  <div class="lc-main">
+    <pre class="code-lines lc-code" data-code></pre>
+    <figure class="lc-mem">
+      <figcaption class="lc-label">{s.memory}</figcaption>
+      <svg data-grid role="img" aria-label={s.memory}></svg>
+    </figure>
+  </div>
+
+  <dl class="lc-stats">
+    <div><dt>{s.size}</dt><dd data-stat="size">0</dd></div>
+    <div><dt>{s.align}</dt><dd data-stat="align">1</dd></div>
+    <div class="pad"><dt>{s.padding}</dt><dd data-stat="pad">0</dd></div>
+  </dl>
+
+  <div class="widget-caption">
+    <p data-note="rust" set:html={s.reprRust} />
+    <p data-note="c" hidden set:html={s.reprC} />
+  </div>
+</WidgetFrame>
+
+<script>
+  import { highlightRust } from '@/scripts/rust-highlight';
+
+  const TYPES: Record<string, { size: number; align: number }> = {
+    u8: { size: 1, align: 1 }, u16: { size: 2, align: 2 }, u32: { size: 4, align: 4 }, u64: { size: 8, align: 8 },
+    bool: { size: 1, align: 1 }, char: { size: 4, align: 4 }, '&T': { size: 8, align: 8 },
+  };
+  const COLORS = ['--accent', '--info', '--violet', '--ok', '--warn', '--tok-mac', '--danger', '--tok-type'];
+  const NAMES = 'abcdefgh'.split('');
+  const MAX = 8;
+  const CELL = 34, GAP = 4, LEFT = 40;
+  const NS = 'http://www.w3.org/2000/svg';
+
+  interface Field { id: number; name: string; ty: string }
+  interface Placed extends Field { offset: number; size: number; color: string }
+
+  function layout(fields: Field[], repr: 'rust' | 'c') {
+    const order = repr === 'c' ? [...fields] : [...fields].sort((a, b) => TYPES[b.ty]!.align - TYPES[a.ty]!.align);
+    let offset = 0;
+    let align = 1;
+    const placed: Placed[] = [];
+    for (const f of order) {
+      const t = TYPES[f.ty]!;
+      offset = Math.ceil(offset / t.align) * t.align;
+      placed.push({ ...f, offset, size: t.size, color: COLORS[f.id % COLORS.length]! });
+      offset += t.size;
+      align = Math.max(align, t.align);
+    }
+    const size = Math.ceil(offset / align) * align;
+    const used = placed.reduce((n, p) => n + p.size, 0);
+    return { placed, size, align, padding: size - used };
+  }
+
+  class LayoutCalculator extends HTMLElement {
+    fields: Field[] = [];
+    nextId = 0;
+    repr: 'rust' | 'c' = 'rust';
+    strings: Record<string, string> = {};
+
+    connectedCallback() {
+      this.strings = JSON.parse(this.dataset.strings ?? '{}');
+      for (const ty of ['u8', 'u64', 'u16', 'bool']) this.add(ty, false);
+      this.querySelectorAll<HTMLButtonElement>('[data-add]').forEach((b) => b.addEventListener('click', () => this.add(b.dataset.add!)));
+      this.querySelectorAll<HTMLButtonElement>('[data-repr]').forEach((b) =>
+        b.addEventListener('click', () => {
+          this.repr = b.dataset.repr as 'rust' | 'c';
+          this.querySelectorAll('[data-repr]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          this.querySelectorAll<HTMLElement>('[data-note]').forEach((p) => (p.hidden = p.dataset.note !== this.repr));
+          this.render();
+        }),
+      );
+      this.querySelector('[data-clear]')!.addEventListener('click', () => { this.fields = []; this.nextId = 0; this.render(); });
+      this.render();
+    }
+
+    add(ty: string, render = true) {
+      if (this.fields.length >= MAX) return;
+      const used = new Set(this.fields.map((f) => f.name));
+      const name = NAMES.find((n) => !used.has(n))!;
+      this.fields.push({ id: this.nextId++, name, ty });
+      if (render) this.render();
+    }
+
+    render() {
+      const { placed, size, align, padding } = layout(this.fields, this.repr);
+      this.querySelectorAll<HTMLButtonElement>('[data-add]').forEach((b) => (b.disabled = this.fields.length >= MAX));
+
+      // field chips
+      const list = this.querySelector('[data-fields]')!;
+      list.replaceChildren(
+        ...this.fields.map((f) => {
+          const li = document.createElement('li');
+          li.style.setProperty('--c', `var(${COLORS[f.id % COLORS.length]})`);
+          li.innerHTML = `<span>${f.name}: <b>${f.ty.replace('&', '&amp;')}</b></span><button type="button" aria-label="${this.strings.remove} ${f.name}">×</button>`;
+          li.querySelector('button')!.addEventListener('click', () => {
+            this.fields = this.fields.filter((x) => x !== f);
+            this.render();
+          });
+          return li;
+        }),
+      );
+
+      // source code, fields in memory order with offsets
+      const code = [
+        ...(this.repr === 'c' ? ['#[repr(C)]'] : []),
+        'struct S {',
+        ...this.fields.map((f) => {
+          const p = placed.find((x) => x.id === f.id)!;
+          const ty = f.ty === '&T' ? "&'a T" : f.ty;
+          return `    ${f.name}: ${ty}, // offset ${p.offset}`;
+        }),
+        '}',
+      ];
+      const pre = this.querySelector('[data-code]')!;
+      pre.innerHTML = code.map((l) => `<span class="ln">${highlightRust(l) || ' '}</span>`).join('');
+
+      // byte grid
+      const svg = this.querySelector<SVGSVGElement>('[data-grid]')!;
+      const rows = Math.max(1, Math.ceil(size / 8));
+      const width = LEFT + 8 * (CELL + GAP);
+      const height = rows * (CELL + GAP);
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      svg.replaceChildren();
+      svg.insertAdjacentHTML(
+        'afterbegin',
+        `<defs><pattern id="lc-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" class="lc-hatch-bg"/><line x1="0" y1="0" x2="0" y2="6" class="lc-hatch-line"/></pattern></defs>`,
+      );
+      if (!size) {
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', String(LEFT));
+        t.setAttribute('y', String(CELL / 2 + 4));
+        t.setAttribute('class', 'lc-empty');
+        t.textContent = '∅';
+        svg.append(t);
+      }
+      for (let r = 0; r < rows && size; r++) {
+        const label = document.createElementNS(NS, 'text');
+        label.setAttribute('x', '0');
+        label.setAttribute('y', String(r * (CELL + GAP) + CELL / 2 + 4));
+        label.setAttribute('class', 'lc-offset');
+        label.textContent = `+${r * 8}`;
+        svg.append(label);
+      }
+      for (let b = 0; b < size; b++) {
+        const owner = placed.find((p) => b >= p.offset && b < p.offset + p.size);
+        const x = LEFT + (b % 8) * (CELL + GAP);
+        const y = Math.floor(b / 8) * (CELL + GAP);
+        const g = document.createElementNS(NS, 'g');
+        g.setAttribute('class', owner ? 'lc-byte' : 'lc-byte lc-pad');
+        g.setAttribute('style', `--d:${b * 18}ms;${owner ? `--c:var(${owner.color})` : ''}`);
+        g.innerHTML =
+          `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" rx="6"/>` +
+          (owner && b === owner.offset ? `<text x="${x + CELL / 2}" y="${y + CELL / 2 + 5}">${owner.name}</text>` : '') +
+          (!owner ? `<title>${this.strings.pad}</title>` : '');
+        svg.append(g);
+      }
+
+      this.querySelector('[data-stat="size"]')!.textContent = `${size} ${this.strings.bytes}`;
+      this.querySelector('[data-stat="align"]')!.textContent = `${align}`;
+      this.querySelector('[data-stat="pad"]')!.textContent = `${padding} ${this.strings.bytes}`;
+      this.classList.toggle('has-pad', padding > 0);
+      this.querySelector('[data-fields]')!.toggleAttribute('data-empty', !this.fields.length);
+      this.querySelector('[data-fields]')!.setAttribute('data-empty-text', this.strings.empty!);
+    }
+  }
+  customElements.define('layout-calculator', LayoutCalculator);
+</script>
+
+<style is:global>
+  layout-calculator {
+    display: block;
+    & .lc-top { display: flex; flex-wrap: wrap; gap: var(--space-3); justify-content: space-between; align-items: flex-end; }
+    & .lc-label { display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); margin-block-end: var(--space-1); }
+    & .lc-types { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+    & .lc-type {
+      padding: 0.25rem 0.6rem; border-radius: var(--radius-s); border: 1px dashed var(--border-strong);
+      background: var(--surface); font: 600 0.78rem var(--font-mono); color: var(--text-muted);
+      transition: border-color var(--dur), color var(--dur), background-color var(--dur);
+      &:hover:not(:disabled) { border-style: solid; border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+      &:disabled { opacity: 0.4; cursor: not-allowed; }
+    }
+    & .lc-fields-wrap { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 var(--space-3);
+      & .lc-label { grid-column: 1 / -1; } }
+    & .lc-fields {
+      list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); min-block-size: 2rem;
+      &[data-empty]::before { content: attr(data-empty-text); font-size: var(--step--1); color: var(--text-muted); }
+      & li {
+        display: inline-flex; align-items: center; gap: var(--space-1); padding: 0.2rem 0.3rem 0.2rem 0.6rem;
+        border-radius: var(--radius-full); font: 0.78rem var(--font-mono);
+        background: color-mix(in oklch, var(--c) 16%, var(--surface)); border: 1px solid color-mix(in oklch, var(--c) 50%, transparent);
+        animation: fade-up 300ms var(--ease-out);
+      }
+      & button {
+        display: inline-grid; place-items: center; inline-size: 1.3rem; block-size: 1.3rem; border-radius: 50%;
+        border: 0; background: transparent; color: var(--text-muted); font-size: 1rem; line-height: 1;
+        &:hover { background: var(--surface-3); color: var(--text); }
+      }
+    }
+    & .lc-main { display: grid; gap: var(--space-4); grid-template-columns: minmax(0, 1fr); align-items: start; }
+    @container widget (width >= 38rem) { & .lc-main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+    & .lc-code { margin: 0; }
+    & .lc-mem { margin: 0; }
+    & [data-grid] { inline-size: 100%; max-inline-size: 22rem; block-size: auto; overflow: visible; }
+    & .lc-offset { font: 11px var(--font-mono); fill: var(--text-faint); }
+    & .lc-empty { font: 20px var(--font-mono); fill: var(--text-faint); }
+    & .lc-byte {
+      animation: lc-pop 380ms var(--ease-spring) both; animation-delay: var(--d);
+      & rect { fill: color-mix(in oklch, var(--c) 30%, var(--surface)); stroke: var(--c); stroke-width: 1.5; }
+      & text { font: 700 14px var(--font-mono); text-anchor: middle; fill: var(--text); }
+    }
+    & .lc-pad rect { fill: url(#lc-hatch); stroke: var(--border-strong); stroke-dasharray: 3 2; }
+    & .lc-hatch-bg { fill: var(--surface-2); }
+    & .lc-hatch-line { stroke: color-mix(in oklch, var(--danger) 45%, transparent); stroke-width: 2; }
+    & .lc-stats {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); margin: 0;
+      & div { padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border); }
+      & dt { font: 0.7rem var(--font-mono); color: var(--text-faint); }
+      & dd { margin: 0; font: 700 var(--step-0) var(--font-mono); }
+    }
+    &.has-pad .lc-stats .pad { border-color: color-mix(in oklch, var(--danger) 45%, var(--border)); & dd { color: var(--danger); } }
+    & [data-note] { margin: 0; }
+  }
+  @keyframes lc-pop { from { opacity: 0; scale: 0.6; } }
+  layout-calculator .lc-byte { transform-box: fill-box; transform-origin: center; }
+</style>

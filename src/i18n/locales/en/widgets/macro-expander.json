@@ -1,0 +1,48 @@
+{
+  "title": "Watching macro_rules! expand",
+  "subtitle": "Pick an invocation and step through matching and transcription",
+  "prev": "Previous",
+  "next": "Next",
+  "restart": "Restart",
+  "definition": "Definition",
+  "invocation": "Invocation",
+  "bindings": "Metavariable bindings",
+  "noBindings": "No bindings yet",
+  "expansion": "Expansion",
+  "notExpanded": "Not expanded yet",
+  "step": "Step {n} of {total}",
+  "repetition": "rep.",
+  "presets": [
+    {
+      "label": "hashmap!",
+      "steps": [
+        "The parser sees a path, a <code>!</code> and a delimited token tree. The contents are <em>not</em> parsed as an expression yet: they are just tokens handed to the macro.",
+        "Arms are tried from top to bottom. The first matcher <code>()</code> only accepts an empty input, so it fails and the next arm is tried.",
+        "The second matcher fits. <code>$( … ),+</code> means \"one or more, separated by commas\", and <code>$(,)?</code> tolerates a trailing comma.",
+        "Each repetition binds <code>$k</code> and <code>$v</code> as <code>expr</code> fragments. A fragment is parsed as a whole AST node, so <code>2 + 2</code> would be bound as one expression, not three tokens.",
+        "The transcriber is copied out. <code>$( map.insert($k, $v); )+</code> repeats once per captured pair, in order.",
+        "The result replaces the invocation. Thanks to hygiene, this <code>map</code> lives in the macro's own syntax context: it cannot clash with a <code>map</code> variable at the call site."
+      ]
+    },
+    {
+      "label": "count! (recursive)",
+      "steps": [
+        "<code>count!</code> receives three token trees: <code>a</code>, <code>b</code> and <code>c</code>. They don't need to be valid expressions: <code>tt</code> accepts anything.",
+        "The input is not empty, so the base case <code>()</code> fails.",
+        "<code>$head:tt</code> takes the first token tree, <code>$($tail:tt)*</code> captures whatever is left. The output contains another <code>count!</code> call.",
+        "Macro output is expanded again, so the recursion continues with <code>b c</code>.",
+        "One more round: <code>$head</code> is <code>c</code> and <code>$tail</code> captures nothing.",
+        "The empty input finally matches the base case. Constant folding turns the sum into <code>3</code> at compile time. Recursion depth is capped by <code>#![recursion_limit]</code> (128 by default)."
+      ]
+    },
+    {
+      "label": "no match",
+      "steps": [
+        "Same <code>hashmap!</code> macro, but the caller wrote <code>:</code> instead of <code>=></code>, as in a JSON or Python dict.",
+        "The empty matcher fails, as before.",
+        "The second arm starts well: <code>\"ada\"</code> is a valid <code>expr</code> and binds to <code>$k</code>. Then the matcher expects the literal token <code>=></code> and finds <code>:</code>.",
+        "No arm is left, so expansion fails with a compile error pointing at the unexpected token, plus a note on what the matcher wanted. Macro errors are compile errors, never runtime surprises."
+      ]
+    }
+  ]
+}

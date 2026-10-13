@@ -1,0 +1,223 @@
+---
+title: Test e strumenti
+description: Unit test, test di integrazione e doc test integrati, più clippy, rustfmt e rustdoc. L'intera cassetta degli attrezzi arriva insieme al compilatore.
+duration: 20
+tags: [cargo test, clippy, rustfmt, rustdoc, CI]
+---
+
+Nella maggior parte degli ecosistemi la prima ora di un nuovo progetto se ne va nello scegliere un test runner, una libreria di asserzioni, un linter, un formatter e un generatore di documentazione, e poi nel metterli d'accordo tra loro. In Rust quella decisione è già stata presa. `cargo test`, `cargo clippy`, `cargo fmt` e `cargo doc` fanno parte della toolchain standard, ogni progetto Rust li usa allo stesso modo, e una configurazione di CI che funziona per un crate funziona per quasi tutti.
+
+## I test sono semplici funzioni
+
+Un test è una funzione annotata con `#[test]`. Passa se termina normalmente e fallisce se va in panic. Il contratto è tutto qui: non esiste un tipo speciale di asserzione né un DSL alla `expect(...).toBe(...)`. Le macro di asserzione sono macro normali che vanno in panic con un messaggio utile.
+
+```rust
+pub fn parse_time(s: &str) -> Result<u32, String> {
+    // ...
+}
+
+#[cfg(test)]          // compilato solo per `cargo test`
+mod tests {
+    use super::*;     // un modulo figlio vede gli elementi privati del padre
+
+    #[test]
+    fn parses_half_past_one() {
+        assert_eq!(parse_time("01:30"), Ok(90));
+    }
+
+    #[test]
+    #[should_panic(expected = "empty input")]
+    fn panics_on_empty_input() {
+        parse_time_or_panic("");
+    }
+
+    #[test]
+    fn rejects_out_of_range() -> Result<(), String> {
+        let err = parse_time("24:00").unwrap_err();
+        assert!(err.contains("out of range"));
+        Ok(()) // restituire Err fa fallire il test, quindi `?` funziona nei test
+    }
+}
+```
+
+La convenzione di mettere gli unit test in un modulo figlio `tests` **nello stesso file** non è solo una questione di stile. Poiché la privacy è per modulo, il figlio può testare direttamente le funzioni private, e `#[cfg(test)]` toglie l'intero modulo dalle build normali, così gli helper dei test non finiscono mai nel tuo binario.
+
+Il Playground compila gli snippet come programmi e non come suite di test, ma le asserzioni funzionano allo stesso modo ovunque. Esegui questo codice, poi cambia un valore atteso per vedere come appare un fallimento:
+
+<Playground title="Le macro di asserzione">
+```rust
+/// Converte "HH:MM" nei minuti trascorsi dalla mezzanotte.
+fn parse_time(s: &str) -> Result<u32, String> {
+    let (h, m) = s.split_once(':').ok_or("manca ':'")?;
+    let h: u32 = h.parse().map_err(|_| format!("ore non valide: {h}"))?;
+    let m: u32 = m.parse().map_err(|_| format!("minuti non validi: {m}"))?;
+    if h > 23 || m > 59 {
+        return Err(format!("fuori intervallo: {s}"));
+    }
+    Ok(h * 60 + m)
+}
+
+fn main() {
+    assert_eq!(parse_time("00:00"), Ok(0));
+    assert_eq!(parse_time("01:30"), Ok(90), "un'ora e mezza");
+    assert!(parse_time("24:00").is_err());
+    assert_ne!(parse_time("12:00"), parse_time("12:01"));
+    assert!(matches!(parse_time("7"), Err(e) if e.contains(':')));
+
+    // Cambia un valore atteso qui sopra ed esegui di nuovo: il messaggio di
+    // panic mostra `left` e `right`, esattamente come un #[test] che fallisce.
+    println!("tutte le asserzioni sono passate");
+}
+```
+</Playground>
+
+`assert_eq!` richiede che entrambi i lati implementino `PartialEq` e `Debug`, così in caso di fallimento può stampare entrambi i valori. `debug_assert!` e simili fanno lo stesso ma vengono rimossi dalle build di release, il che li rende adatti a controlli costosi sugli invarianti nel codice più critico per le prestazioni.
+
+<Compare left="Jest">
+```ts
+import { parseTime } from "./time";
+
+describe("parseTime", () => {
+  it("parses half past one", () => {
+    expect(parseTime("01:30")).toBe(90);
+  });
+  it("throws on empty input", () => {
+    expect(() => parseTime("")).toThrow("empty");
+  });
+});
+```
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_half_past_one() {
+        assert_eq!(parse_time("01:30"), Ok(90));
+    }
+
+    #[test]
+    #[should_panic(expected = "empty")]
+    fn panics_on_empty_input() {
+        parse_time_or_panic("");
+    }
+}
+```
+</Compare>
+
+## Tre tipi di test, un solo comando
+
+`cargo test` compila ed esegue tre cose diverse:
+
+| Tipo | Dove | Cosa vede | Scopo |
+| --- | --- | --- | --- |
+| Unit test | `#[cfg(test)] mod tests` dentro `src/` | tutto, anche gli elementi privati | testare gli interni in isolamento |
+| Test di integrazione | ogni file in `tests/` | solo l'API pubblica, come un utente esterno | testare il crate nel suo insieme |
+| Doc test | blocchi di codice nei commenti `///` | solo l'API pubblica | mantenere gli esempi della documentazione compilabili e corretti |
+
+I doc test meritano una menzione speciale. Ogni blocco di codice in un commento di documentazione viene estratto, avvolto in una funzione `main` e compilato come programma separato. Un esempio nel README che non corrisponde più all'API è un test che fallisce, non una bugia silenziosa:
+
+````rust
+/// Converte "HH:MM" nei minuti trascorsi dalla mezzanotte.
+///
+/// ```
+/// assert_eq!(timeparse::parse_time("01:30"), Ok(90));
+/// assert!(timeparse::parse_time("25:00").is_err());
+/// ```
+pub fn parse_time(s: &str) -> Result<u32, String> { /* ... */ }
+````
+
+Flag utili: `cargo test parse` esegue solo i test il cui nome contiene `parse`; `cargo test -- --nocapture` mostra l'output di `println!`, che per default viene catturato; `cargo test --doc` esegue solo i doc test; `#[ignore]` marca i test lenti, che girano solo con `-- --ignored`.
+
+<Callout type="runtime">
+In Rust non c'è reflection: come fa il runner a trovare i tuoi test? In compilazione. Con `--test`, rustc raccoglie ogni funzione `#[test]` in un array statico e genera un `main` che lo passa a **libtest**, l'harness incluso nella distribuzione standard. libtest esegue poi ogni test sul proprio thread (in parallelo per default, regolabile con `--test-threads`) e usa `catch_unwind` per trasformare un panic in un risultato "failed" invece che in un crash. Il Playground qui sotto ricostruisce l'idea a mano.
+</Callout>
+
+<Playground title="Un test harness in 30 righe">
+```rust
+use std::panic;
+
+// Una versione in miniatura di ciò che l'harness libtest fa per te:
+// ogni test è una normale fn, eseguita in isolamento, e un panic significa "fallito".
+fn adds_up() {
+    assert_eq!(2 + 2, 4);
+}
+fn divides_by_zero() {
+    let d = std::hint::black_box(0);
+    let _ = 10 / d; // panic: attempt to divide by zero
+}
+fn wrong_math() {
+    assert_eq!(2 * 3, 5, "la moltiplicazione è rotta");
+}
+
+fn main() {
+    panic::set_hook(Box::new(|_| {})); // mantiene pulito l'output
+    let tests: [(&str, fn(), bool); 3] = [
+        ("adds_up", adds_up, false),
+        ("divides_by_zero", divides_by_zero, true), // come #[should_panic]
+        ("wrong_math", wrong_math, false),
+    ];
+    let mut failed = 0;
+    for (name, test, should_panic) in tests {
+        let panicked = panic::catch_unwind(test).is_err();
+        let ok = panicked == should_panic;
+        if !ok {
+            failed += 1;
+        }
+        println!("test {name} ... {}", if ok { "ok" } else { "FAILED" });
+    }
+    println!("\ntest result: {} passed; {failed} failed", tests.len() - failed);
+}
+```
+</Playground>
+
+Questo spiega anche un limite: i test compilati con `panic = "abort"` non potrebbero intercettare i fallimenti, ed è per questo che le build di test usano sempre l'unwinding.
+
+## Il resto della cassetta degli attrezzi
+
+Scorri i comandi per vedere cosa stampa ciascuno su un piccolo crate di libreria:
+
+<CargoTerminal />
+
+- **Clippy** (`cargo clippy`) aggiunge circa 800 lint oltre ai warning del compilatore: codice non idiomatico (`len() == 0`), probabili bug (confrontare float con `==`), trappole di prestazioni (clonare dove basterebbe un borrow). I lint si configurano nel codice con `#[allow(clippy::nome)]` oppure per l'intero workspace in `Cargo.toml` sotto `[lints.clippy]`.
+- **rustfmt** (`cargo fmt`) ha un unico stile canonico e pochissime opzioni. La comunità lo ha adottato così largamente che il codice Rust non formattato salta subito all'occhio.
+- **rustdoc** (`cargo doc`) genera documentazione HTML dai commenti `///` in Markdown, con link interni come `` [`parse_time`] `` risolti e verificati dal compilatore.
+- **Benchmark**: il `#[bench]` integrato è ancora instabile, quindi lo standard dell'ecosistema è il crate **criterion** (o il più leggero **divan**), con i benchmark in `benches/` eseguiti da `cargo bench`. Misura sempre in modalità release.
+
+<Callout type="tip" title="Due strumenti che vale la pena installare">
+`cargo expand` (dal crate `cargo-expand`) stampa il tuo codice dopo l'espansione delle macro: il modo migliore per capire cosa generano davvero `#[derive(Debug)]` o `#[tokio::main]`. **Miri** (`rustup component add miri`, poi `cargo miri test`) è un interprete della MIR che rileva a runtime i comportamenti indefiniti: aritmetica dei puntatori fuori dai limiti, use-after-free e data race nel codice `unsafe`. Se mai scrivi `unsafe`, esegui i tuoi test sotto Miri.
+</Callout>
+
+## Una pipeline di CI minima
+
+Poiché ogni progetto usa gli stessi comandi, la CI per un crate Rust è breve e quasi universale:
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-features
+```
+
+L'ordine conta per avere un feedback rapido: la formattazione fallisce in pochi secondi, Clippy in qualcuno in più, i test per ultimi. `-D warnings` trasforma ogni warning in errore solo in CI, così lo sviluppo locale resta rilassato mentre il branch principale resta pulito.
+
+## Punti chiave
+
+- Un test è una funzione `#[test]` che passa terminando normalmente e fallisce andando in panic; le asserzioni sono macro normali.
+- Gli unit test vivono in un modulo figlio `#[cfg(test)]` e possono testare gli elementi privati; i test di integrazione in `tests/` vedono solo l'API pubblica.
+- Ogni blocco di codice in un commento di documentazione viene compilato ed eseguito come doc test, quindi gli esempi non possono invecchiare.
+- Il test runner viene generato in compilazione e usa un thread per test più `catch_unwind`.
+- `clippy`, `rustfmt` e `rustdoc` arrivano con la toolchain; `cargo-expand` e Miri sono i prossimi due strumenti da imparare.
+- Una CI standard è fatta di tre comandi: `fmt --check`, `clippy -D warnings`, `test`.

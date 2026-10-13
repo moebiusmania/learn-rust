@@ -1,0 +1,16 @@
+{
+  "title": "Is this match exhaustive?",
+  "subtitle": "Toggle the arms and watch the compiler react",
+  "armsLabel": "Match arms",
+  "wildcardLabel": "Position of _",
+  "first": "first",
+  "last": "last",
+  "statusOk": "Compiles",
+  "statusWarn": "Compiles with warnings",
+  "statusError": "Does not compile",
+  "okText": "Every possible <code>Message</code> value is handled by at least one arm. Adding a new variant to the enum later will make this match fail to compile until you handle it.",
+  "warnText": "A <code>_</code> arm matches everything, so the arms after it can never run. The compiler warns because it is almost always a bug.",
+  "errorText": "Some variants have no arm. Rust refuses to compile a match that could fall through, so a forgotten case can never reach production.",
+  "guardText": "Note that the guarded arm (<code>if x == y</code>) does not count: the compiler does not reason about guard conditions, so <code>Move</code> still needs an unguarded arm.",
+  "wildcardText": "The <code>_</code> wildcard makes the match exhaustive, but it also silences the compiler if a variant is added later. Prefer listing variants explicitly for enums you own."
+}

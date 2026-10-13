@@ -1,0 +1,240 @@
+---
+title: Smart pointers and interior mutability
+description: Box, Rc, Weak, Cell and RefCell, the library types that relax single ownership in controlled, visible ways.
+duration: 25
+tags: [Box, Rc, RefCell, Weak, Drop]
+---
+
+Single ownership plus borrowing covers most programs, but not all of them. A tree whose nodes point to their parent, a cache shared by several components, a value whose size is unknown at compile time: these need something more. Rust does not solve them in the language. It solves them with **smart pointers**: ordinary structs from the standard library that own a value, implement `Deref` so they behave like references, and implement `Drop` to clean up.
+
+The important property is that each one makes its trade-off *explicit*. When you see `Rc<RefCell<T>>` in a signature, you know there is reference counting and a runtime borrow check involved. Nothing is hidden behind a garbage collector.
+
+## `Box<T>`: a value on the heap, with one owner
+
+`Box<T>` is the simplest smart pointer: it allocates `T` on the heap and stores a pointer to it. Ownership rules are unchanged: the box has one owner, and when the owner goes out of scope the box frees the allocation. You reach for it in three situations:
+
+1. **Recursive types.** The compiler must know the size of every type. `enum List { Cons(i32, List), Nil }` would be infinitely large; `Box<List>` has the size of a pointer.
+2. **Trait objects.** `Box<dyn Shape>` lets a `Vec` hold values of different concrete types behind one interface.
+3. **Moving large values cheaply** or giving a value a stable address.
+
+<Playground title="Box for recursion and trait objects">
+```rust
+// A recursive type needs indirection: Box gives it a known size.
+#[derive(Debug)]
+enum List {
+    Cons(i32, Box<List>),
+    Nil,
+}
+use List::{Cons, Nil};
+
+trait Shape {
+    fn area(&self) -> f64;
+}
+struct Circle(f64);
+struct Square(f64);
+impl Shape for Circle { fn area(&self) -> f64 { 3.14159 * self.0 * self.0 } }
+impl Shape for Square { fn area(&self) -> f64 { self.0 * self.0 } }
+
+fn sum(list: &List) -> i32 {
+    match list {
+        Cons(value, rest) => value + sum(rest),
+        Nil => 0,
+    }
+}
+
+fn main() {
+    let list = Cons(1, Box::new(Cons(2, Box::new(Cons(3, Box::new(Nil))))));
+    println!("{list:?} sums to {}", sum(&list));
+
+    // Heterogeneous collection: each element is a fat pointer (data + vtable)
+    let shapes: Vec<Box<dyn Shape>> = vec![Box::new(Circle(1.0)), Box::new(Square(2.0))];
+    let total: f64 = shapes.iter().map(|s| s.area()).sum();
+    println!("total area = {total:.2}");
+
+    println!("size_of Box<i32>       = {}", size_of::<Box<i32>>());
+    println!("size_of Box<dyn Shape> = {}", size_of::<Box<dyn Shape>>());
+}
+```
+</Playground>
+
+Notice the sizes: `Box<i32>` is one pointer (8 bytes on 64-bit), `Box<dyn Shape>` is two, because a trait object carries a pointer to its vtable alongside the data pointer.
+
+<Callout type="compare" from="Java / C#">
+In Java every object lives on the heap and every variable is a reference, so you never think about it. In Rust values live on the stack by default and `Box` is the explicit opt-in to heap allocation. A `Vec<Point>` stores the points inline in one buffer; a `List<Point>` in Java stores an array of references to separately allocated objects.
+</Callout>
+
+## `Deref` and `Drop`: what makes a pointer "smart"
+
+Two traits give smart pointers their ergonomics:
+
+```rust
+use std::ops::Deref;
+
+struct Wrapper<T>(T);
+
+impl<T> Deref for Wrapper<T> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.0 }
+}
+
+impl<T> Drop for Wrapper<T> {
+    fn drop(&mut self) { println!("cleaning up"); }
+}
+```
+
+`Deref` enables **deref coercion**: a `&Box<String>` or `&Rc<String>` is accepted wherever a `&str` is expected, because the compiler inserts as many `*` as needed at compile time. Method calls auto-deref too, which is why `boxed_vec.len()` just works.
+
+`Drop` is Rust's destructor. It runs exactly once, when the owner goes out of scope, in reverse order of declaration. You cannot call `x.drop()` yourself; use `std::mem::drop(x)`, which simply takes ownership and lets the value go out of scope immediately.
+
+## `Rc<T>`: shared ownership through reference counting
+
+Sometimes a value genuinely has several owners and no single one of them outlives the others: nodes in a graph, a configuration object handed to many subsystems. `Rc<T>` (*reference counted*) puts the value on the heap next to two counters. `Rc::clone` does **not** deep-copy the value: it copies the pointer and increments the strong count. When the last `Rc` is dropped, the value is dropped.
+
+`Rc` only hands out shared references (`&T`), so the value is read-only, which keeps aliasing XOR mutability intact. Try the operations below and watch both counters:
+
+<RcVisualizer />
+
+The **weak count** exists to break cycles. If a parent holds an `Rc` to its child and the child holds an `Rc` to its parent, the strong counts never reach zero and the memory leaks (safely, but it leaks). The fix is to make one direction a `Weak<T>`: it does not keep the value alive, and `upgrade()` returns an `Option<Rc<T>>` that is `None` once the value is gone.
+
+<Playground title="Strong and weak counts">
+```rust
+use std::rc::{Rc, Weak};
+
+struct Noisy(&'static str);
+impl Drop for Noisy {
+    fn drop(&mut self) {
+        println!("  drop({})", self.0);
+    }
+}
+
+fn main() {
+    let a = Rc::new(Noisy("config"));
+    println!("strong = {}", Rc::strong_count(&a));
+
+    let b = Rc::clone(&a); // bumps the counter, no deep copy
+    let w: Weak<Noisy> = Rc::downgrade(&a);
+    println!("strong = {}, weak = {}", Rc::strong_count(&a), Rc::weak_count(&a));
+
+    drop(a);
+    println!("after drop(a): upgrade ok? {}", w.upgrade().is_some());
+
+    drop(b); // last strong owner: the value is dropped here
+    println!("after drop(b): upgrade ok? {}", w.upgrade().is_some());
+}
+```
+</Playground>
+
+<Callout type="runtime">
+An `Rc<T>` is a single pointer to an `RcBox` on the heap laid out as `{ strong: Cell<usize>, weak: Cell<usize>, value: T }`. Cloning is a non-atomic increment, a handful of CPU cycles. The value is dropped when `strong` reaches zero, but the allocation itself is only freed when `weak` reaches zero too, because outstanding `Weak` pointers still need to read the counters to answer `upgrade()`. `Rc` is deliberately **not** thread-safe: the compiler refuses to send it to another thread (it is not `Send`), and you use `Arc` instead.
+</Callout>
+
+## Interior mutability: `Cell` and `RefCell`
+
+`Rc` gives you shared ownership but only immutable access. What if several owners need to modify the value? The borrow checker's rule is static: it must prove at compile time that no `&mut` coexists with any other reference. **Interior mutability** moves that proof to runtime for specific types.
+
+- `Cell<T>` works for `Copy` types: `get()` copies the value out, `set()` replaces it. No reference into the cell is ever handed out, so no aliasing is possible and there is zero overhead beyond the copy.
+- `RefCell<T>` works for any `T`. `borrow()` returns a `Ref<T>` guard, `borrow_mut()` returns a `RefMut<T>` guard. The cell keeps a counter of active borrows and enforces the same rules as the compiler (many readers or one writer), but **at runtime**. Breaking them panics.
+
+<Playground title="A runtime borrow error">
+```rust
+use std::cell::RefCell;
+
+fn main() {
+    let log = RefCell::new(Vec::new());
+
+    log.borrow_mut().push("start");          // short-lived &mut, released at `;`
+    println!("len = {}", log.borrow().len()); // shared borrow, fine
+
+    let first = log.borrow();                 // a shared borrow stays alive...
+    println!("first entry: {}", first[0]);
+
+    // ...so this mutable borrow is rejected AT RUNTIME: it panics with
+    // "RefCell already borrowed". Try moving `drop(first);` above it.
+    log.borrow_mut().push("oops");
+    drop(first);
+}
+```
+</Playground>
+
+This compiles, and then panics. That is the trade-off: the program is still memory-safe, but a mistake that `&mut` would have caught at compile time now shows up as a crash in a test. Use `try_borrow_mut()` when a conflict is a legitimate possibility you want to handle, and keep guards short-lived: borrow, use, let the guard drop.
+
+<Callout type="warn">
+`RefCell` is not an escape hatch for "the borrow checker is annoying". Reach for it when ownership is genuinely shared and dynamic, such as observers, graph nodes, or mocks in tests. If a plain `&mut` parameter would work, it is cheaper, checked earlier and clearer to read.
+</Callout>
+
+## The `Rc<RefCell<T>>` pattern
+
+Combining the two gives you something close to an object reference in a garbage-collected language: many owners, all able to mutate. Each layer does one job: `Rc` answers *who owns it*, `RefCell` answers *who may write right now*.
+
+<Playground title="Shared, mutable state">
+```rust
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct Account {
+    owner: String,
+    balance: i64,
+}
+
+fn main() {
+    // Shared ownership (Rc) + interior mutability (RefCell)
+    let shared = Rc::new(RefCell::new(Account { owner: "ada".into(), balance: 100 }));
+
+    let mobile_app = Rc::clone(&shared);
+    let web_app = Rc::clone(&shared);
+
+    mobile_app.borrow_mut().balance -= 30;
+    web_app.borrow_mut().balance += 5;
+
+    let account = shared.borrow();
+    println!("{} now has {}", account.owner, account.balance);
+    println!("owners of the allocation: {}", Rc::strong_count(&shared));
+}
+```
+</Playground>
+
+<Compare left="TypeScript">
+```ts
+class Account {
+  constructor(public owner: string, public balance: number) {}
+}
+const shared = new Account("ada", 100);
+const mobileApp = shared; // just another reference
+const webApp = shared;
+mobileApp.balance -= 30;  // anyone can mutate, anytime
+webApp.balance += 5;
+```
+
+```rust
+let shared = Rc::new(RefCell::new(
+    Account { owner: "ada".into(), balance: 100 },
+));
+let mobile_app = Rc::clone(&shared); // counted owner
+let web_app = Rc::clone(&shared);
+mobile_app.borrow_mut().balance -= 30; // checked writer
+web_app.borrow_mut().balance += 5;
+```
+</Compare>
+
+The Rust version is more verbose, and that is the point: the sharing and the mutation are visible at every use site, and both have a known, small cost.
+
+## Crossing threads: `Arc` and `Mutex`
+
+`Rc` and `RefCell` use plain integers for their counters, so they are only safe on one thread. Their thread-safe counterparts have the same shape:
+
+| Single thread | Multi-thread | Cost difference |
+| --- | --- | --- |
+| `Rc<T>` | `Arc<T>` | atomic increments instead of plain ones |
+| `RefCell<T>` | `Mutex<T>` / `RwLock<T>` | blocks the thread instead of panicking |
+| `Cell<T>` | atomics (`AtomicUsize`, …) | hardware atomic instructions |
+
+So `Rc<RefCell<T>>` becomes `Arc<Mutex<T>>` across threads. The compiler enforces the choice through the `Send` and `Sync` traits, covered in the advanced track's concurrency lesson.
+
+## Key takeaways
+
+- Smart pointers are library structs that own data, implement `Deref` for ergonomic access and `Drop` for cleanup.
+- `Box<T>`: single owner, heap allocation. Use it for recursive types, trait objects and large values.
+- `Rc<T>`: multiple owners via a non-atomic reference count; read-only access. `Weak<T>` breaks cycles and does not keep the value alive.
+- `Cell` and `RefCell` move the aliasing XOR mutability check from compile time to runtime; a violation in `RefCell` is a panic.
+- `Rc<RefCell<T>>` is the single-threaded shared mutable pattern; `Arc<Mutex<T>>` is its multi-threaded twin.
+- Every one of these costs is visible in the type, which is exactly what lets you avoid them when you do not need them.

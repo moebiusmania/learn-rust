@@ -1,0 +1,14 @@
+{
+  "title": "Intermediate",
+  "tagline": "Abstractions without overhead",
+  "summary": "Traits, generics, lifetimes, closures, iterators, smart pointers and the Cargo ecosystem: how idiomatic Rust is structured.",
+  "intro": "Once ownership clicks, the next step is learning how Rust builds abstractions. Traits replace inheritance, generics are resolved at compile time, lifetimes describe how references relate to each other, and iterators turn loops into composable pipelines that still compile to tight machine code.",
+  "concepts": [
+    { "title": "Traits, not inheritance", "text": "Behaviour is shared through traits implemented for types, including types you did not write. There are no classes and no subtype hierarchy." },
+    { "title": "Monomorphization", "text": "Generic code is copied and specialized for every concrete type at compile time. It costs binary size, not runtime speed." },
+    { "title": "Static vs dynamic dispatch", "text": "impl Trait and generics dispatch statically; dyn Trait uses a fat pointer with a vtable. You choose explicitly, per call site." },
+    { "title": "Lifetimes are constraints", "text": "A lifetime annotation does not change how long anything lives. It tells the compiler how the validity of references relates, so it can verify them." },
+    { "title": "Lazy iterators", "text": "Iterator adapters do nothing until consumed. The whole chain is fused and inlined into a single loop by the optimizer." },
+    { "title": "Opt-in sharing", "text": "Shared ownership (Rc, Arc) and interior mutability (RefCell, Mutex) exist, but they are library types you reach for explicitly, with visible costs." }
+  ]
+}

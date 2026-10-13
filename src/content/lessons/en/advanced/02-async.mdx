@@ -1,0 +1,257 @@
+---
+title: Async Rust under the hood
+description: Futures as state machines, poll and wakers, why there is no built-in runtime, Pin, and when to choose async over threads.
+duration: 30
+tags: [async, Future, Waker, Pin, Tokio]
+---
+
+`async`/`await` in Rust looks like the syntax you know from JavaScript, C# or Python. The model underneath is very different: there is **no event loop in the language**, futures **do nothing until polled**, and an `async fn` compiles into a plain struct whose size is known at compile time. Understanding those three facts explains almost every surprising error you will meet.
+
+## An async fn is a state machine
+
+When you write
+
+```rust
+async fn job() -> usize {
+    let a = read_socket().await;
+    let b = read_file().await;
+    a.len() + b.len()
+}
+```
+
+the compiler does not create a coroutine with its own stack. It generates an anonymous type, roughly an `enum` with one variant per suspension point, holding the local variables that must survive across each `.await`:
+
+```rust
+enum JobFuture {
+    Start,
+    AwaitingSocket { fut: ReadSocket },
+    AwaitingFile { a: String, fut: ReadFile },
+    Done,
+}
+```
+
+That type implements the `Future` trait, whose only method is `poll`:
+
+```rust
+pub trait Future {
+    type Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+}
+
+pub enum Poll<T> { Ready(T), Pending }
+```
+
+Each call to `poll` advances the machine as far as it can. If it reaches an `.await` whose inner future is not ready, it returns `Poll::Pending`; when the function body finishes it returns `Poll::Ready(value)`.
+
+<Callout type="compare" from="JavaScript / C#">
+A JavaScript `Promise` or a C# `Task` starts running as soon as it is created and is driven by a runtime built into the platform. A Rust future is **lazy**: calling `job()` only builds the state machine. If you never `.await` it or hand it to an executor, its body never runs, and the compiler warns you with `unused future must be used`.
+</Callout>
+
+## Polling by hand
+
+The standard library defines `Future`, `Poll`, `Context` and `Waker`, but it ships **no executor**. To see the mechanics, here is a complete program with a hand-written future and the smallest possible executor: a loop that polls until the result is ready.
+
+<Playground title="A future, a waker and a 10-line executor">
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+
+/// A future that needs `left` extra polls before completing,
+/// standing in for "waiting on a socket".
+struct Countdown {
+    left: u32,
+}
+
+impl Future for Countdown {
+    type Output = &'static str;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.left == 0 {
+            return Poll::Ready("done");
+        }
+        println!("    poll -> Pending ({} left)", self.left);
+        self.left -= 1;
+        // A real leaf future hands the waker to the OS reactor.
+        // Here we wake immediately: "poll me again".
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+async fn job() -> usize {
+    println!("  job: started");
+    let a = Countdown { left: 2 }.await; // await point #1
+    println!("  job: first await returned {a}");
+    let b = Countdown { left: 1 }.await; // await point #2
+    a.len() + b.len()
+}
+
+/// The smallest possible executor: poll until Ready.
+struct NoopWaker;
+impl Wake for NoopWaker {
+    fn wake(self: Arc<Self>) {}
+}
+
+fn block_on<F: Future>(fut: F) -> F::Output {
+    let mut fut = std::pin::pin!(fut);
+    let waker = Waker::from(Arc::new(NoopWaker));
+    let mut cx = Context::from_waker(&waker);
+    for polls in 1.. {
+        if let Poll::Ready(value) = fut.as_mut().poll(&mut cx) {
+            println!("executor: Ready after {polls} polls");
+            return value;
+        }
+    }
+    unreachable!()
+}
+
+fn main() {
+    let fut = job(); // nothing printed yet: futures are lazy
+    println!("future created ({} bytes), not started", std::mem::size_of_val(&fut));
+    let result = block_on(fut);
+    println!("result = {result}");
+}
+```
+</Playground>
+
+Notice the first line of output: the future exists and has a fixed size *before* `job: started` is printed. Our `block_on` spins in a busy loop, which is fine for a demo and terrible in production. A real executor **sleeps** when no task can make progress and relies on the `Waker` to be told when to poll again.
+
+## Executors, reactors and wakers
+
+A production runtime such as **Tokio** has two halves:
+
+- The **executor** keeps a queue of tasks that are ready to make progress and polls them, on one thread or on a pool of worker threads.
+- The **reactor** talks to the operating system (`epoll` on Linux, `kqueue` on macOS, IOCP on Windows). When a leaf future such as a socket read returns `Pending`, it registers the task's `Waker` with the reactor. When the OS reports that the socket is readable, the reactor calls `waker.wake()`, which puts the task back in the ready queue.
+
+Step through the cycle below. Watch how three tasks share one thread, and how the thread only works while some task can actually progress.
+
+<AsyncExecutor />
+
+<Callout type="runtime">
+Because the language has no built-in runtime, you choose one as a dependency: **Tokio** (the de facto standard for servers), **smol** (small and modular), **embassy** (embedded, no heap) or a single-threaded executor in WebAssembly. The cost is ecosystem fragmentation: a library written against Tokio's I/O types does not automatically run on another runtime. The benefit is that async Rust also works on a microcontroller with 64 KB of RAM.
+</Callout>
+
+## Concurrency with join, spawn and select
+
+With an executor in place, `async` code reads like the code you know. The important distinction is between **awaiting in sequence** and **running concurrently**. The playground has Tokio available, so this example uses it:
+
+<Playground title="Sequential awaits vs join! vs spawn">
+```rust
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
+
+async fn fetch(name: &str, ms: u64) -> String {
+    sleep(Duration::from_millis(ms)).await; // simulated network call
+    name.to_string()
+}
+
+#[tokio::main]
+async fn main() {
+    let t = Instant::now();
+    let a = fetch("users", 200).await;
+    let b = fetch("orders", 300).await;
+    println!("sequential: {a} + {b} in {} ms", t.elapsed().as_millis());
+
+    let t = Instant::now();
+    let (a, b) = tokio::join!(fetch("users", 200), fetch("orders", 300));
+    println!("join!:      {a} + {b} in {} ms", t.elapsed().as_millis());
+
+    // spawn hands a task to the runtime, possibly on another worker thread
+    let handles: Vec<_> = (1..=3u64)
+        .map(|id| tokio::spawn(async move { sleep(Duration::from_millis(50 * id)).await; id * 10 }))
+        .collect();
+    let mut sum = 0;
+    for h in handles {
+        sum += h.await.unwrap();
+    }
+    println!("spawned tasks returned {sum}");
+}
+```
+</Playground>
+
+- `.await` one after the other: total time is the **sum** (about 500 ms).
+- `join!` polls both futures inside the same task: total time is the **maximum** (about 300 ms).
+- `tokio::spawn` creates an independent **task**, scheduled by the runtime and possibly moved between worker threads. It returns a `JoinHandle` you can await.
+- `tokio::select!` (not shown) races several futures and drops the losers, which is how timeouts and cancellation work: dropping a future cancels it.
+
+<Compare left="TypeScript">
+```ts
+async function main() {
+  const a = await fetch("users");
+  const b = await fetch("orders");
+
+  const [c, d] = await Promise.all([
+    fetch("users"),
+    fetch("orders"),
+  ]);
+}
+```
+
+```rust
+#[tokio::main]
+async fn main() {
+    let a = fetch("users").await;
+    let b = fetch("orders").await;
+
+    let (c, d) = tokio::join!(
+        fetch("users"),
+        fetch("orders"),
+    );
+}
+```
+</Compare>
+
+## Send bounds and the multi-threaded runtime
+
+Tokio's default runtime is multi-threaded and uses work stealing: a task suspended on worker 1 may be resumed on worker 3. So `tokio::spawn` requires the future to be `Send`, and a future is `Send` only if **everything it keeps alive across an `.await`** is `Send`.
+
+<Playground title="An Rc held across .await" expectError>
+```rust
+use std::rc::Rc;
+
+#[tokio::main]
+async fn main() {
+    let handle = tokio::spawn(async {
+        let shared = Rc::new(42);
+        tokio::task::yield_now().await; // `shared` is alive across this .await
+        println!("{shared}");
+    });
+    handle.await.unwrap();
+}
+```
+</Playground>
+
+The error, *future cannot be sent between threads safely*, points at the exact `.await` where the `Rc` is still alive. The fixes are to use `Arc`, to drop the value before the `.await`, or to run the task on a single-threaded `LocalSet`. The same rule explains a classic: holding a `std::sync::MutexGuard` across `.await` makes the future non-`Send` (and could deadlock the worker anyway). Use `tokio::sync::Mutex` or release the guard first.
+
+## Why Pin exists
+
+The state machine stores local variables as fields. If one local borrows another (`let r = &buf;` and then an `.await`), the generated struct contains a pointer **into itself**. Moving such a struct in memory would leave that pointer dangling.
+
+`Pin<&mut Self>` is the promise that the value will not be moved again after it has been polled for the first time. That is why `poll` takes `self: Pin<&mut Self>`, why our executor calls `std::pin::pin!` before polling, and why you sometimes need `Box::pin` to store futures in collections. Most types are `Unpin` (moving them is always fine) and `Pin` has no effect on them; it only matters for self-referential futures, and you rarely deal with it outside of executor or combinator code.
+
+## Async or threads?
+
+| | OS threads | async tasks |
+| --- | --- | --- |
+| Memory per unit | a stack (often 2–8 MB reserved) | the size of the state machine (bytes to KB) |
+| Switching | kernel context switch | a function return and a call |
+| Good for | CPU-bound work, blocking libraries | many concurrent I/O waits (sockets, timers) |
+| Pitfall | thousands of threads are expensive | a blocking call stalls the whole worker |
+
+Async pays off when you wait on thousands of connections. For number crunching, use threads or Rayon. When an async task must run something blocking or CPU-heavy, hand it to `tokio::task::spawn_blocking` so it does not freeze the other tasks on that worker.
+
+<Callout type="warn" title="Never block inside async code">
+`std::thread::sleep`, synchronous file I/O or a long computation inside an `async fn` do not yield: the executor thread is stuck and every other task on it waits. Use the runtime's async equivalents (`tokio::time::sleep`, `tokio::fs`) or `spawn_blocking`.
+</Callout>
+
+## Key takeaways
+
+- An `async fn` compiles to a fixed-size state machine implementing `Future`; locals that live across `.await` become fields.
+- Futures are lazy and are driven by `poll`, which returns `Ready` or `Pending`.
+- A `Waker` is how a leaf future tells the executor "poll me again"; the reactor wakes tasks when the OS reports I/O readiness.
+- The language ships no runtime: Tokio, smol or embassy are libraries you pick.
+- `join!` runs futures concurrently in one task; `spawn` creates independent tasks, which must be `Send` on a multi-threaded runtime.
+- `Pin` guarantees that self-referential futures are not moved after polling starts.
+- Use async for many I/O waits, threads for CPU-bound work, and never block an executor thread.

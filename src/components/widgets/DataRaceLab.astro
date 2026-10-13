@@ -1,0 +1,359 @@
+---
+/**
+ * Canvas simulation of N threads incrementing a shared counter, in three
+ * modes: unsynchronized read/write (lost updates), Mutex and AtomicUsize.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+
+interface Strings {
+  title: string; subtitle: string;
+  modes: Record<'race' | 'mutex' | 'atomic', string>;
+  threads: string; increments: string; run: string; reset: string;
+  expected: string; actual: string; lost: string; counter: string; waiting: string;
+  read: string; write: string; add: string;
+  captions: Record<'race' | 'mutex' | 'atomic', string>;
+  compileError: string;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'data-race-lab');
+const modes = ['race', 'mutex', 'atomic'] as const;
+const canvasStrings = { counter: s.counter, waiting: s.waiting, read: s.read, write: s.write, add: s.add };
+---
+<WidgetFrame tag="data-race-lab" title={s.title} subtitle={s.subtitle} icon="threads" data-strings={JSON.stringify(canvasStrings)}>
+  <div class="drl-top">
+    <div class="seg" role="group" aria-label={s.title}>
+      {modes.map((m, i) => <button type="button" data-mode={m} aria-pressed={i === 0 ? 'true' : 'false'}>{s.modes[m]}</button>)}
+    </div>
+    <div class="drl-sliders">
+      <label>{s.threads} <output data-out="threads">4</output>
+        <input type="range" min="2" max="6" value="4" data-input="threads" />
+      </label>
+      <label>{s.increments} <output data-out="k">6</output>
+        <input type="range" min="3" max="12" value="6" data-input="k" />
+      </label>
+    </div>
+  </div>
+
+  <canvas class="widget-canvas drl-canvas" aria-hidden="true"></canvas>
+
+  <dl class="drl-stats" aria-live="polite">
+    <div><dt>{s.expected}</dt><dd data-stat="expected">24</dd></div>
+    <div><dt>{s.actual}</dt><dd data-stat="actual">0</dd></div>
+    <div class="lost"><dt>{s.lost}</dt><dd data-stat="lost">0</dd></div>
+  </dl>
+
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm" data-run><Icon name="play" size={14} /><span>{s.run}</span></button>
+    <button type="button" class="btn btn-sm btn-ghost" data-reset><Icon name="reset" size={14} /><span>{s.reset}</span></button>
+  </div>
+
+  <div class="widget-caption">
+    {modes.map((m, i) => <p data-caption={m} hidden={i !== 0} set:html={s.captions[m]} />)}
+    <pre class="drl-error" data-error><code>{s.compileError}</code></pre>
+  </div>
+</WidgetFrame>
+
+<script>
+  type Mode = 'race' | 'mutex' | 'atomic';
+  interface Thread { done: number; phase: 'idle' | 'read'; reg: number; readVersion: number; waiting: boolean }
+  interface Flash { lane: number; kind: 'read' | 'write' | 'lost' | 'add'; t0: number }
+
+  class DataRaceLab extends HTMLElement {
+    mode: Mode = 'race';
+    n = 4;
+    k = 6;
+    counter = 0;
+    version = 0;
+    lost = 0;
+    lock: number | null = null;
+    current = -1;
+    threads: Thread[] = [];
+    flashes: Flash[] = [];
+    timer: number | undefined;
+    raf = 0;
+    canvas!: HTMLCanvasElement;
+    ctx!: CanvasRenderingContext2D;
+    colors: Record<string, string> = {};
+    strings: Record<string, string> = {};
+    probe!: HTMLSpanElement;
+    reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    connectedCallback() {
+      this.strings = JSON.parse(this.dataset.strings ?? '{}');
+      this.canvas = this.querySelector('canvas')!;
+      this.ctx = this.canvas.getContext('2d')!;
+      this.probe = document.createElement('span');
+      this.probe.hidden = true;
+      this.append(this.probe);
+
+      this.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((b) =>
+        b.addEventListener('click', () => {
+          this.mode = b.dataset.mode as Mode;
+          this.querySelectorAll('[data-mode]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          this.querySelectorAll<HTMLElement>('[data-caption]').forEach((p) => (p.hidden = p.dataset.caption !== this.mode));
+          this.querySelector<HTMLElement>('[data-error]')!.hidden = this.mode !== 'race';
+          this.reset();
+        }),
+      );
+      this.querySelectorAll<HTMLInputElement>('[data-input]').forEach((input) =>
+        input.addEventListener('input', () => {
+          const v = Number(input.value);
+          if (input.dataset.input === 'threads') this.n = v; else this.k = v;
+          this.querySelector(`[data-out="${input.dataset.input === 'threads' ? 'threads' : 'k'}"]`)!.textContent = String(v);
+          this.reset();
+        }),
+      );
+      this.querySelector('[data-run]')!.addEventListener('click', () => this.run());
+      this.querySelector('[data-reset]')!.addEventListener('click', () => this.reset());
+
+      new ResizeObserver(() => this.resize()).observe(this.canvas);
+      new MutationObserver(() => this.readColors()).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => this.readColors());
+      this.readColors();
+      this.reset();
+    }
+
+    disconnectedCallback() { clearInterval(this.timer); cancelAnimationFrame(this.raf); }
+
+    /** Resolve design tokens (which use light-dark()) to concrete colors. */
+    readColors() {
+      const names = ['accent', 'text', 'text-muted', 'text-faint', 'border', 'border-strong', 'surface', 'surface-2', 'surface-3', 'info', 'danger', 'ok', 'warn', 'violet'];
+      for (const name of names) {
+        this.probe.style.color = `var(--${name})`;
+        this.colors[name] = getComputedStyle(this.probe).color;
+      }
+      this.draw();
+    }
+
+    resize() {
+      const dpr = window.devicePixelRatio || 1;
+      const w = this.canvas.clientWidth;
+      const h = 36 + this.n * 46;
+      this.canvas.style.height = `${h}px`;
+      this.canvas.width = Math.round(w * dpr);
+      this.canvas.height = Math.round(h * dpr);
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.draw();
+    }
+
+    reset() {
+      clearInterval(this.timer);
+      this.timer = undefined;
+      this.counter = 0;
+      this.version = 0;
+      this.lost = 0;
+      this.lock = null;
+      this.flashes = [];
+      this.threads = Array.from({ length: this.n }, () => ({ done: 0, phase: 'idle', reg: 0, readVersion: 0, waiting: false }));
+      this.querySelector<HTMLButtonElement>('[data-run]')!.disabled = false;
+      this.updateStats();
+      this.resize();
+    }
+
+    run() {
+      if (this.threads.every((t) => t.done === this.k)) this.reset();
+      this.querySelector<HTMLButtonElement>('[data-run]')!.disabled = true;
+      this.timer = window.setInterval(() => this.tick(), this.reduced ? 20 : 110);
+      this.loop();
+    }
+
+    tick() {
+      const runnable = this.threads
+        .map((t, i) => ({ t, i }))
+        .filter(({ t, i }) => t.done < this.k && (this.mode !== 'mutex' || this.lock === null || this.lock === i));
+      this.threads.forEach((t, i) => (t.waiting = this.mode === 'mutex' && t.done < this.k && this.lock !== null && this.lock !== i));
+      if (!runnable.length) {
+        clearInterval(this.timer);
+        this.timer = undefined;
+        this.querySelector<HTMLButtonElement>('[data-run]')!.disabled = false;
+        this.updateStats();
+        return;
+      }
+      // Like a real scheduler, usually let the current thread keep running
+      // (a time slice) and only sometimes preempt it in the middle.
+      const keep = runnable.find((r) => r.i === this.current);
+      const pick = keep && Math.random() < 0.85 ? keep : runnable[Math.floor(Math.random() * runnable.length)]!;
+      const { t, i } = pick;
+      this.current = i;
+      const now = performance.now();
+      if (this.mode === 'atomic') {
+        this.counter++;
+        t.done++;
+        this.flashes.push({ lane: i, kind: 'add', t0: now });
+      } else if (t.phase === 'idle') {
+        if (this.mode === 'mutex') this.lock = i;
+        t.reg = this.counter;
+        t.readVersion = this.version;
+        t.phase = 'read';
+        this.flashes.push({ lane: i, kind: 'read', t0: now });
+      } else {
+        const overwrote = this.version !== t.readVersion;
+        this.counter = t.reg + 1;
+        this.version++;
+        t.done++;
+        t.phase = 'idle';
+        if (overwrote) this.lost++;
+        if (this.mode === 'mutex') this.lock = null;
+        this.flashes.push({ lane: i, kind: overwrote ? 'lost' : 'write', t0: now });
+      }
+      this.updateStats();
+    }
+
+    updateStats() {
+      const expected = this.n * this.k;
+      const finished = this.threads.every((t) => t.done === this.k);
+      this.querySelector('[data-stat="expected"]')!.textContent = String(expected);
+      this.querySelector('[data-stat="actual"]')!.textContent = String(this.counter);
+      this.querySelector('[data-stat="lost"]')!.textContent = String(finished ? expected - this.counter : this.lost);
+      this.classList.toggle('has-lost', this.lost > 0);
+    }
+
+    loop() {
+      cancelAnimationFrame(this.raf);
+      const frame = () => {
+        this.draw();
+        const now = performance.now();
+        this.flashes = this.flashes.filter((f) => now - f.t0 < 600);
+        if (this.timer !== undefined || this.flashes.length) this.raf = requestAnimationFrame(frame);
+      };
+      this.raf = requestAnimationFrame(frame);
+    }
+
+    draw() {
+      const { ctx, colors: c } = this;
+      if (!ctx || !c.text) return;
+      const w = this.canvas.clientWidth;
+      const h = 36 + this.n * 46;
+      ctx.clearRect(0, 0, w, h);
+      const boxW = Math.min(130, w * 0.28);
+      const boxX = w - boxW - 14;
+      const boxY = h / 2 - 36;
+      const laneEnd = boxX - Math.max(24, w * 0.08);
+      const barX = 104;
+      const barW = Math.max(30, laneEnd - barX - 8);
+      const font = (size: number, weight = 500, mono = false) =>
+        `${weight} ${size}px ${mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'system-ui, sans-serif'}`;
+      const now = performance.now();
+
+      // flashes: lines between lanes and the counter
+      for (const f of this.flashes) {
+        const age = (now - f.t0) / 600;
+        const y = 30 + f.lane * 46;
+        ctx.globalAlpha = 1 - age;
+        ctx.strokeStyle = f.kind === 'lost' ? c.danger! : f.kind === 'read' ? c.info! : f.kind === 'add' ? c.ok! : c.accent!;
+        ctx.lineWidth = f.kind === 'lost' ? 3 : 2;
+        ctx.beginPath();
+        ctx.moveTo(laneEnd, y);
+        ctx.bezierCurveTo((laneEnd + boxX) / 2, y, (laneEnd + boxX) / 2, h / 2, boxX, h / 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      this.threads.forEach((t, i) => {
+        const y = 30 + i * 46;
+        const active = this.flashes.find((f) => f.lane === i && now - f.t0 < 250);
+        // name
+        ctx.fillStyle = c.text!;
+        ctx.font = font(13, 700, true);
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`T${i + 1}`, 12, y);
+        // register
+        ctx.fillStyle = t.phase === 'read' ? c['surface-3']! : c['surface']!;
+        ctx.strokeStyle = t.phase === 'read' ? c.info! : c['border-strong']!;
+        ctx.lineWidth = 1.5;
+        roundRect(ctx, 44, y - 13, 48, 26, 7);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = t.phase === 'read' ? c.text! : c['text-faint']!;
+        ctx.font = font(12, 600, true);
+        ctx.textAlign = 'center';
+        ctx.fillText(t.phase === 'read' ? String(t.reg) : '–', 68, y + 1);
+        ctx.textAlign = 'left';
+        // progress bar
+        ctx.fillStyle = c['surface-3']!;
+        roundRect(ctx, barX, y - 4, barW, 8, 4);
+        ctx.fill();
+        ctx.fillStyle = t.waiting ? c['text-faint']! : c.accent!;
+        roundRect(ctx, barX, y - 4, (barW * t.done) / this.k, 8, 4);
+        ctx.fill();
+        // status
+        ctx.font = font(11);
+        ctx.fillStyle = active?.kind === 'lost' ? c.danger! : c['text-muted']!;
+        const label = t.waiting
+          ? this.strings.waiting
+          : active
+            ? active.kind === 'add' ? this.strings.add : active.kind === 'read' ? this.strings.read : this.strings.write
+            : `${t.done}/${this.k}`;
+        ctx.fillText(label!, barX, y - 13);
+        // lock token
+        if (this.mode === 'mutex' && this.lock === i) {
+          ctx.fillStyle = c.warn!;
+          ctx.beginPath();
+          ctx.arc(laneEnd + 4, y, 7, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = c.warn!;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(laneEnd + 4, y - 7, 4.5, Math.PI, 0);
+          ctx.stroke();
+        }
+      });
+
+      // shared counter
+      const lostNow = this.flashes.some((f) => f.kind === 'lost' && now - f.t0 < 300);
+      ctx.fillStyle = c.surface!;
+      ctx.strokeStyle = lostNow ? c.danger! : c.accent!;
+      ctx.lineWidth = 2;
+      roundRect(ctx, boxX, boxY, boxW, 72, 12);
+      ctx.fill();
+      ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = c['text-muted']!;
+      ctx.font = font(11, 600);
+      ctx.fillText(this.strings.counter!, boxX + boxW / 2, boxY + 18);
+      ctx.fillStyle = lostNow ? c.danger! : c.text!;
+      ctx.font = font(26, 700, true);
+      ctx.fillText(String(this.counter), boxX + boxW / 2, boxY + 46);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, Math.max(0, w), h, Math.min(r, w / 2, h / 2));
+  }
+
+  customElements.define('data-race-lab', DataRaceLab);
+</script>
+
+<style>
+  data-race-lab { display: block; }
+  .drl-top { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); align-items: center; justify-content: space-between; }
+  .drl-sliders {
+    display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); font-size: 0.8rem; color: var(--text-muted);
+    & label { display: grid; grid-template-columns: 1fr auto; gap: 0 var(--space-2); min-inline-size: 9rem; }
+    & input { grid-column: 1 / -1; }
+    & output { font-family: var(--font-mono); color: var(--text); font-weight: 600; }
+  }
+  .drl-canvas { display: block; block-size: 220px; }
+  .drl-stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); margin: 0;
+    & div { padding: var(--space-2) var(--space-3); border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border); }
+    & dt { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); }
+    & dd { margin: 0; font: 700 var(--step-1) var(--font-mono); }
+  }
+  :global(data-race-lab.has-lost) .lost {
+    border-color: color-mix(in oklch, var(--danger) 50%, var(--border));
+    background: color-mix(in oklch, var(--danger) 10%, var(--surface));
+    & dd { color: var(--danger); }
+  }
+  .drl-error {
+    margin-block-start: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-s);
+    background: var(--code-bg); border: 1px solid color-mix(in oklch, var(--danger) 40%, var(--border));
+    color: var(--danger); font-size: 0.78rem; white-space: pre-wrap; overflow-wrap: anywhere;
+    &[hidden] { display: none; }
+  }
+  [data-caption] { margin: 0; }
+  @container widget (width < 30rem) { .drl-stats dd { font-size: var(--step-0); } }
+</style>

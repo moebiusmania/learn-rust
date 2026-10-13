@@ -1,0 +1,167 @@
+---
+/**
+ * Orphan-rule explorer: a grid of types × traits. Each cell is an
+ * `impl Trait for Type` in the reader's crate; selecting it explains
+ * whether coherence allows it.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+import { highlightRust } from '@/scripts/rust-highlight';
+
+interface Strings {
+  title: string; subtitle: string; local: string; foreign: string; allowed: string; rejected: string;
+  corner: string; intro: string; cells: Record<string, string>;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'trait-matrix');
+
+const types = [
+  { id: 'point', label: 'Point', local: true, generic: false },
+  { id: 'i32', label: 'i32', local: false, generic: false },
+  { id: 'vecT', label: 'Vec<T>', local: false, generic: true },
+  { id: 'vecPoint', label: 'Vec<Point>', local: false, generic: false },
+];
+const traits = [
+  { id: 'describe', label: 'Describe', local: true },
+  { id: 'display', label: 'Display', local: false },
+  { id: 'iterator', label: 'Iterator', local: false },
+];
+const cells = types.flatMap((ty) =>
+  traits.map((tr) => {
+    const ok = ty.local || tr.local;
+    const code = `impl${ty.generic ? '<T>' : ''} ${tr.label} for ${ty.label} { … }`;
+    return { key: `${ty.id}-${tr.id}`, ty, tr, ok, code: highlightRust(code) };
+  }),
+);
+const first = cells[1]!;
+---
+<WidgetFrame tag="trait-matrix" title={s.title} subtitle={s.subtitle} icon="layers">
+  <p class="tm-intro muted" set:html={s.intro} />
+  <div class="tm-grid" role="grid" aria-label={s.title} style={`--cols:${traits.length}`}>
+    <div class="tm-corner">{s.corner}</div>
+    {
+      traits.map((tr) => (
+        <div class="tm-head" role="columnheader">
+          <code>{tr.label}</code>
+          <span class:list={['tm-chip', { local: tr.local }]}>{tr.local ? s.local : s.foreign}</span>
+        </div>
+      ))
+    }
+    {
+      types.map((ty) => (
+        <>
+          <div class="tm-head tm-row" role="rowheader">
+            <code>{ty.label}</code>
+            <span class:list={['tm-chip', { local: ty.local }]}>{ty.local ? s.local : s.foreign}</span>
+          </div>
+          {cells
+            .filter((c) => c.ty.id === ty.id)
+            .map((c) => (
+              <button
+                type="button"
+                class:list={['tm-cell', c.ok ? 'ok' : 'no']}
+                data-key={c.key}
+                aria-pressed={c.key === first.key ? 'true' : 'false'}
+                aria-label={`${c.tr.label} for ${c.ty.label}: ${c.ok ? s.allowed : s.rejected}`}
+              >
+                <Icon name={c.ok ? 'check' : 'alert'} size={18} />
+              </button>
+            ))}
+        </>
+      ))
+    }
+  </div>
+  <div class="widget-caption tm-caption" aria-live="polite">
+    {
+      cells.map((c) => (
+        <div data-detail={c.key} hidden={c.key !== first.key}>
+          <div class="tm-verdict">
+            <span class:list={['tm-badge', c.ok ? 'ok' : 'no']}>{c.ok ? s.allowed : s.rejected}</span>
+            <code class="tm-code" set:html={c.code} />
+          </div>
+          <p set:html={s.cells[c.key]} />
+        </div>
+      ))
+    }
+  </div>
+</WidgetFrame>
+
+<script>
+  class TraitMatrix extends HTMLElement {
+    connectedCallback() {
+      const cells = [...this.querySelectorAll<HTMLButtonElement>('.tm-cell')];
+      const cols = Number(getComputedStyle(this.querySelector('.tm-grid')!).getPropertyValue('--cols')) || 3;
+      const select = (btn: HTMLButtonElement) => {
+        cells.forEach((c) => c.setAttribute('aria-pressed', String(c === btn)));
+        this.querySelectorAll<HTMLElement>('[data-detail]').forEach((d) => (d.hidden = d.dataset.detail !== btn.dataset.key));
+      };
+      cells.forEach((btn, i) => {
+        btn.addEventListener('click', () => select(btn));
+        btn.addEventListener('keydown', (e) => {
+          const moves: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols };
+          const d = moves[e.key];
+          if (d === undefined) return;
+          e.preventDefault();
+          const next = cells[i + d];
+          if (next) { next.focus(); select(next); }
+        });
+      });
+    }
+  }
+  customElements.define('trait-matrix', TraitMatrix);
+</script>
+
+<style>
+  trait-matrix { display: block; }
+  .tm-intro { font-size: var(--step--1); }
+  .tm-intro :global(code), .tm-caption :global(code) { font-size: 0.88em; }
+  .tm-grid {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, auto) repeat(var(--cols), minmax(0, 1fr));
+    gap: 6px;
+    align-items: stretch;
+  }
+  .tm-corner { font-size: 0.7rem; color: var(--text-faint); align-self: end; padding: 0.3rem; }
+  .tm-head {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    padding: 0.4rem; font-size: 0.8rem; text-align: center;
+    & code { font-weight: 600; }
+  }
+  .tm-row { align-items: flex-start; text-align: start; }
+  .tm-chip {
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 0.05rem 0.45rem; border-radius: var(--radius-full);
+    background: var(--surface-3); color: var(--text-muted);
+    &.local { background: var(--accent-soft); color: var(--accent-strong); }
+  }
+  .tm-cell {
+    --c: var(--ok);
+    display: grid; place-items: center; min-block-size: 3rem;
+    border-radius: var(--radius-s); border: 1px solid color-mix(in oklch, var(--c) 35%, var(--border));
+    background: color-mix(in oklch, var(--c) 14%, var(--surface));
+    color: var(--c);
+    transition: background-color var(--dur), scale 300ms var(--ease-spring), box-shadow var(--dur);
+    &.no { --c: var(--danger); }
+    &:hover { background: color-mix(in oklch, var(--c) 22%, var(--surface)); }
+    &[aria-pressed='true'] {
+      background: color-mix(in oklch, var(--c) 28%, var(--surface));
+      box-shadow: 0 0 0 2px var(--c);
+      scale: 1.04;
+    }
+  }
+  .tm-caption { display: grid; }
+  .tm-caption [data-detail] { animation: fade-up 350ms var(--ease-out); display: grid; gap: var(--space-2); }
+  .tm-caption [hidden] { display: none; }
+  .tm-verdict { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+  .tm-badge {
+    font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.15rem 0.6rem; border-radius: var(--radius-full);
+    background: color-mix(in oklch, var(--ok) 18%, transparent); color: var(--ok);
+    &.no { background: color-mix(in oklch, var(--danger) 18%, transparent); color: var(--danger); }
+  }
+  .tm-code { font-size: 0.8rem; background: var(--code-bg) !important; color: var(--text); }
+  @container widget (width < 30rem) {
+    .tm-grid { grid-template-columns: minmax(5rem, auto) repeat(var(--cols), minmax(0, 1fr)); }
+    .tm-head { font-size: 0.7rem; }
+  }
+</style>

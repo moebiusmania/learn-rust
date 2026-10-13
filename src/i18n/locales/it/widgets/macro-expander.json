@@ -1,0 +1,48 @@
+{
+  "title": "Come si espande macro_rules!",
+  "subtitle": "Scegli un'invocazione e segui passo passo matching e trascrizione",
+  "prev": "Precedente",
+  "next": "Successivo",
+  "restart": "Ricomincia",
+  "definition": "Definizione",
+  "invocation": "Invocazione",
+  "bindings": "Binding delle metavariabili",
+  "noBindings": "Ancora nessun binding",
+  "expansion": "Espansione",
+  "notExpanded": "Non ancora espansa",
+  "step": "Passo {n} di {total}",
+  "repetition": "rip.",
+  "presets": [
+    {
+      "label": "hashmap!",
+      "steps": [
+        "Il parser vede un path, un <code>!</code> e un token tree delimitato. Il contenuto <em>non</em> viene ancora interpretato come espressione: sono solo token passati alla macro.",
+        "I rami vengono provati dall'alto verso il basso. Il primo matcher <code>()</code> accetta solo un input vuoto, quindi fallisce e si passa al ramo successivo.",
+        "Il secondo matcher corrisponde. <code>$( … ),+</code> significa \"uno o più, separati da virgole\", e <code>$(,)?</code> tollera una virgola finale.",
+        "Ogni ripetizione lega <code>$k</code> e <code>$v</code> come frammenti <code>expr</code>. Un frammento viene interpretato come un intero nodo dell'AST, quindi <code>2 + 2</code> verrebbe legato come un'unica espressione, non come tre token.",
+        "Il transcriber viene copiato in output. <code>$( map.insert($k, $v); )+</code> si ripete una volta per ogni coppia catturata, in ordine.",
+        "Il risultato sostituisce l'invocazione. Grazie all'igiene, questa <code>map</code> vive nel contesto sintattico della macro: non può entrare in conflitto con una variabile <code>map</code> nel punto di chiamata."
+      ]
+    },
+    {
+      "label": "count! (ricorsiva)",
+      "steps": [
+        "<code>count!</code> riceve tre token tree: <code>a</code>, <code>b</code> e <code>c</code>. Non devono essere espressioni valide: <code>tt</code> accetta qualsiasi cosa.",
+        "L'input non è vuoto, quindi il caso base <code>()</code> fallisce.",
+        "<code>$head:tt</code> prende il primo token tree, <code>$($tail:tt)*</code> cattura tutto il resto. L'output contiene un'altra chiamata a <code>count!</code>.",
+        "L'output di una macro viene espanso di nuovo, quindi la ricorsione continua con <code>b c</code>.",
+        "Un altro giro: <code>$head</code> è <code>c</code> e <code>$tail</code> non cattura nulla.",
+        "L'input vuoto corrisponde finalmente al caso base. Il constant folding trasforma la somma in <code>3</code> in compilazione. La profondità della ricorsione è limitata da <code>#![recursion_limit]</code> (128 di default)."
+      ]
+    },
+    {
+      "label": "nessun match",
+      "steps": [
+        "Stessa macro <code>hashmap!</code>, ma chi la chiama ha scritto <code>:</code> invece di <code>=></code>, come in un oggetto JSON o in un dict Python.",
+        "Il matcher vuoto fallisce, come prima.",
+        "Il secondo ramo parte bene: <code>\"ada\"</code> è un <code>expr</code> valido e viene legato a <code>$k</code>. Poi il matcher si aspetta il token letterale <code>=></code> e trova <code>:</code>.",
+        "Non resta nessun ramo, quindi l'espansione fallisce con un errore di compilazione che indica il token inatteso, più una nota su cosa si aspettava il matcher. Gli errori delle macro sono errori di compilazione, mai sorprese a runtime."
+      ]
+    }
+  ]
+}

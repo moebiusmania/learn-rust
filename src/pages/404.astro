@@ -1,0 +1,24 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import { useTranslations } from '@/i18n';
+import { localeUrl } from '@/lib/url';
+const lang = 'en';
+const { t } = useTranslations(lang);
+const it = useTranslations('it').t;
+---
+<BaseLayout lang={lang} title={t('notFound.title')}>
+  <section class="container nf">
+    <p class="code">404</p>
+    <h1>{t('notFound.title')}</h1>
+    <p class="muted">{t('notFound.text')} · <span lang="it">{it('notFound.text')}</span></p>
+    <p class="links">
+      <a class="btn" href={localeUrl('en')}>{t('notFound.back')}</a>
+      <a class="btn btn-ghost" href={localeUrl('it')} lang="it">{it('notFound.back')}</a>
+    </p>
+  </section>
+</BaseLayout>
+<style>
+  .nf { display: grid; justify-items: center; text-align: center; gap: var(--space-4); padding-block: var(--space-8); }
+  .code { font-family: var(--font-mono); font-size: var(--step-4); font-weight: 800; color: var(--accent); }
+  .links { display: flex; gap: var(--space-3); flex-wrap: wrap; justify-content: center; }
+</style>

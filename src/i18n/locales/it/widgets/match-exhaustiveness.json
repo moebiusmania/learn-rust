@@ -1,0 +1,16 @@
+{
+  "title": "Questo match è esaustivo?",
+  "subtitle": "Attiva e disattiva i rami e guarda come reagisce il compilatore",
+  "armsLabel": "Rami del match",
+  "wildcardLabel": "Posizione di _",
+  "first": "primo",
+  "last": "ultimo",
+  "statusOk": "Compila",
+  "statusWarn": "Compila con warning",
+  "statusError": "Non compila",
+  "okText": "Ogni possibile valore di <code>Message</code> è gestito da almeno un ramo. Se in futuro aggiungi una variante all'enum, questo match smetterà di compilare finché non la gestisci.",
+  "warnText": "Un ramo <code>_</code> corrisponde a qualsiasi valore, quindi i rami che lo seguono non potranno mai essere eseguiti. Il compilatore emette un warning perché quasi sempre si tratta di un bug.",
+  "errorText": "Alcune varianti non hanno un ramo. Rust si rifiuta di compilare un match che potrebbe non coprire un caso, quindi un caso dimenticato non può mai arrivare in produzione.",
+  "guardText": "Nota che il ramo con la guardia (<code>if x == y</code>) non conta: il compilatore non ragiona sulle condizioni delle guardie, quindi <code>Move</code> ha comunque bisogno di un ramo senza guardia.",
+  "wildcardText": "Il carattere jolly <code>_</code> rende il match esaustivo, ma zittisce anche il compilatore quando in futuro verrà aggiunta una variante. Per gli enum che controlli tu, meglio elencare le varianti esplicitamente."
+}

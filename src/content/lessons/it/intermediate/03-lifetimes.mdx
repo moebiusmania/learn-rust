@@ -1,0 +1,158 @@
+---
+title: Lifetime
+description: Cosa esprimono davvero le annotazioni di lifetime, quando devi scriverle, le regole di elisione che di solito te le risparmiano e cosa significa davvero 'static.
+duration: 22
+tags: [lifetime, elisione, "'static", E0597]
+---
+
+I lifetime sono la parte di Rust con la peggiore reputazione e con l'idea di fondo più semplice. Ogni riferimento punta a un valore che vive da qualche parte; il riferimento non deve essere usato dopo che quel valore è sparito. Nei linguaggi con garbage collector il runtime tiene in vita il valore finché qualcuno lo punta. In C e C++ ci si fida del programmatore. Rust lo verifica in compilazione, e i **lifetime** sono i nomi che usa per le regioni di codice in cui un riferimento è valido.
+
+## Vincoli, non durate
+
+La cosa più importante da capire è cosa un'annotazione di lifetime *non* fa: non cambia mai quanto vive un valore. I valori vengono rilasciati alla fine dello scope del loro proprietario, punto. Un'annotazione come `'a` **descrive soltanto una relazione** tra riferimenti, così che il compilatore possa verificarla su ogni chiamante.
+
+Quasi sempre il compilatore deduce tutto all'interno del corpo di una funzione. Ci hai già fatto affidamento: ogni prestito ha ricevuto un lifetime, il borrow checker lo ha verificato e tu non hai scritto un solo `'a`. Il visualizzatore mostra cosa calcola: quanto vive ogni valore e per quanto tempo ogni prestito deve restare valido.
+
+<LifetimeVisualizer />
+
+Il secondo esempio è il classico **riferimento pendente** (dangling reference). In C compila e legge memoria dello stack già liberata; in un linguaggio con GC `x` resterebbe semplicemente in vita. Rust lo rifiuta con `E0597: x does not live long enough`.
+
+## Quando devi annotare: le firme delle funzioni
+
+Dentro un corpo l'inferenza funziona perché il compilatore vede tutto. La **firma** di una funzione invece è un contratto verificato indipendentemente da chi la chiama, quindi quando una funzione restituisce un riferimento, il compilatore deve sapere da quale input può prenderlo in prestito.
+
+<Playground title="Lifetime mancante" expectError>
+```rust
+// Da quale input prende in prestito il riferimento restituito? Il compilatore non può saperlo.
+fn longest(a: &str, b: &str) -> &str {
+    if a.len() >= b.len() { a } else { b }
+}
+
+fn main() {
+    println!("{}", longest("borrow", "checker"));
+}
+```
+</Playground>
+
+La soluzione è dichiarare la relazione: "il risultato prende in prestito da `a` *oppure* da `b`, quindi è valido solo finché lo sono entrambi".
+
+```rust
+fn longest<'a>(a: &'a str, b: &'a str) -> &'a str
+```
+
+Leggi `'a` come un parametro generico, come `T`, ma per regioni di codice. In ogni punto di chiamata il compilatore sceglie la regione più ampia che sta dentro i prestiti di entrambi gli argomenti, e pretende che il risultato non venga usato oltre. Il terzo esempio del visualizzatore mostra proprio questo vincolo che fallisce quando una delle stringhe muore troppo presto.
+
+<Callout type="compare" from="C / C++">
+Una funzione C++ che restituisce `const std::string&` fa implicitamente la stessa promessa, e nessuno la verifica: restituire un riferimento a una variabile locale o a un temporaneo è una classica fonte di crash che i sanitizer intercettano solo a runtime, se un test percorre proprio quel ramo. Rust rende la promessa parte del tipo, così chi chiama non può violarla e l'implementazione non può mentire.
+</Callout>
+
+## Elisione: perché li scrivi di rado
+
+Se ogni funzione con riferimenti richiedesse annotazioni, Rust sarebbe insopportabile. Il compilatore applica tre **regole di elisione** per completarle al posto tuo; devi scriverle solo quando le regole lasciano ambiguo l'output.
+
+1. Ogni parametro riferimento riceve un proprio lifetime distinto: `fn f(a: &str, b: &str)` diventa `fn f<'a, 'b>(a: &'a str, b: &'b str)`.
+2. Se c'è **esattamente un** lifetime in input, viene assegnato a tutti i riferimenti in output: `fn first(s: &str) -> &str` funziona e basta.
+3. Se uno dei parametri è `&self` o `&mut self`, il suo lifetime viene assegnato a tutti gli output. I metodi che restituiscono riferimenti dentro la propria struct non richiedono annotazioni.
+
+`longest` fallisce perché ha due lifetime in input e nessun `self`: nessuna regola si applica al suo output.
+
+## Struct che contengono riferimenti
+
+Anche una struct può memorizzare riferimenti, ma deve dichiarare un parametro di lifetime, che significa: "un'istanza di questa struct non può sopravvivere ai dati che prende in prestito".
+
+<Playground title="Funzioni annotate e struct che prendono in prestito">
+```rust
+// Il risultato è valido finché lo sono ENTRAMBI gli input.
+fn longest<'a>(a: &'a str, b: &'a str) -> &'a str {
+    if a.len() >= b.len() { a } else { b }
+}
+
+// Una struct che prende in prestito: non può sopravvivere al testo a cui punta.
+struct Excerpt<'a> {
+    part: &'a str,
+}
+
+impl<'a> Excerpt<'a> {
+    // Regola di elisione 3: l'output prende in prestito da &self.
+    fn first_word(&self) -> &str {
+        self.part.split_whitespace().next().unwrap_or("")
+    }
+}
+
+fn main() {
+    let novel = String::from("Chiamatemi Ismaele. Alcuni anni fa...");
+    let first_sentence = novel.split('.').next().unwrap();
+    let ex = Excerpt { part: first_sentence };
+    println!("estratto: {:?}, prima parola: {:?}", ex.part, ex.first_word());
+
+    let a = String::from("lifetime");
+    {
+        let b = String::from("scope");
+        // 'a viene dedotto come il più breve dei due scope: va bene, lo usiamo subito.
+        println!("più lunga: {}", longest(&a, &b));
+    }
+}
+```
+</Playground>
+
+Le struct che prendono in prestito sono ottime per viste di breve durata: parser che puntano dentro un buffer di input, iteratori su una collezione, deserializzazione zero-copy. Per dati a lunga vita preferisci campi posseduti (`String` invece di `&str`). Un errore tipico dei principianti è spargere lifetime su ogni struct per evitare di clonare: le annotazioni si propagano a ogni tipo che le contiene e raramente ne vale la pena.
+
+<Callout type="tip" title="Quando il borrow checker si oppone">
+Se stai combattendo con i lifetime di una struct, chiediti se non dovrebbe possedere i suoi dati. Clonare una stringa corta una volta costa poco; ristrutturare un intero modulo attorno a un campo preso in prestito no. Dati posseduti, indici dentro un `Vec`, oppure `Rc`/`Arc` (in una prossima lezione) sono tutte vie d'uscita legittime.
+</Callout>
+
+## 'static e l'equivoco su T: 'static
+
+`'static` è l'unico lifetime con nome integrato nel linguaggio: la regione che dura per tutto il programma. Le stringhe letterali hanno tipo `&'static str` perché i loro byte sono incorporati nel binario.
+
+Il vincolo `T: 'static`, che incontrerai su `std::thread::spawn` e nei runtime async, viene spesso frainteso. **Non** significa "il valore vive per sempre". Significa "`T` non contiene riferimenti presi in prestito più brevi di `'static`". Ogni tipo posseduto lo soddisfa: `String`, `Vec<i32>`, le tue struct senza campi riferimento.
+
+<Playground title="'static come vincolo">
+```rust
+use std::fmt::Debug;
+
+// T: 'static significa "T possiede tutto ciò che contiene (o prende in prestito solo dati 'static)".
+// NON significa che il valore vive per sempre.
+fn keep_for_later<T: Debug + 'static>(value: T) -> Box<dyn Debug> {
+    Box::new(value)
+}
+
+fn main() {
+    let greeting: &'static str = "le stringhe letterali sono incorporate nel binario";
+    println!("{greeting}");
+
+    let owned = String::from("creata a runtime");
+    let kept = keep_for_later(owned);   // OK: String possiede i suoi dati
+    println!("{kept:?}");
+
+    let numbers = vec![1, 2, 3];
+    let kept2 = keep_for_later(numbers.clone());
+    println!("{kept2:?}");
+    // keep_for_later(&numbers);  // errore: `numbers` does not live long enough
+}
+```
+</Playground>
+
+Togli il commento dall'ultima riga per vedere la differenza: un `&Vec<i32>` che punta a una variabile locale non è `'static`, mentre il clone posseduto sì. La stringa creata a runtime soddisfa il vincolo anche se verrà rilasciata molto prima della fine del programma.
+
+<Callout type="runtime">
+I lifetime esistono solo nel compilatore. Vengono verificati sulla MIR dal borrow checker e poi cancellati: non generano codice, né metadati a runtime, né contatori di riferimenti. Due funzioni che differiscono solo per le annotazioni di lifetime compilano in codice macchina identico. È proprio questo il punto: sicurezza della memoria per i riferimenti, senza costi a runtime.
+</Callout>
+
+## Leggere gli errori più comuni
+
+| Errore | Cosa significa | Soluzione tipica |
+| --- | --- | --- |
+| `E0106 missing lifetime specifier` | una firma restituisce un riferimento e l'elisione non sa da dove provenga | aggiungi `'a` che lega l'output agli input giusti |
+| `E0597 does not live long enough` | un valore viene rilasciato mentre un suo prestito è ancora in uso | sposta il valore in uno scope più esterno, o restituisci dati posseduti |
+| `E0515 cannot return reference to local variable` | la funzione restituisce un prestito di qualcosa che ha creato lei | restituisci il valore posseduto (`String`, `Vec`) |
+| `E0499 / E0502` | prestiti mutabili e condivisi in conflitto si sovrappongono | accorcia uno dei prestiti, o ristruttura l'accesso |
+
+## Punti chiave
+
+- Un lifetime dà un nome alla regione in cui un riferimento è valido; le annotazioni descrivono relazioni e non allungano mai la vita dei valori.
+- Nei corpi delle funzioni tutto viene dedotto; le firme richiedono annotazioni solo quando l'elisione non sa da dove arrivi un riferimento restituito.
+- Le tre regole di elisione: ogni input riceve un proprio lifetime; un unico lifetime in input passa agli output; `&self` passa agli output.
+- Le struct che contengono riferimenti richiedono un parametro di lifetime e non possono sopravvivere a ciò che prendono in prestito; per dati a lunga vita preferisci campi posseduti.
+- `T: 'static` significa "non contiene prestiti di breve durata", non "vive per sempre": i valori posseduti lo soddisfano.
+- I lifetime vengono cancellati dopo la verifica: costo zero a runtime.

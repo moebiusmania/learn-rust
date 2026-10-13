@@ -1,0 +1,21 @@
+{
+  "title": "Seguire l'operatore ?",
+  "subtitle": "Scegli quale chiamata fallisce, poi esegui la funzione passo passo",
+  "failLabel": "Chiamata che fallisce",
+  "none": "nessuna",
+  "step": "Avanti",
+  "reset": "Ricomincia",
+  "play": "Avvia",
+  "okNode": "Ok(cfg)",
+  "exitNode": "return Err(…)",
+  "errBranch": "Err(e)",
+  "desugarTitle": "In cosa si espande il ? corrente",
+  "captions": {
+    "start": "Il chiamante invoca <code>load_config</code>. Premi Avanti per seguire il valore attraverso ogni <code>?</code>.",
+    "call": "<code>{fn}</code> viene eseguita e restituisce un <code>Result</code>. Il <code>?</code> lo esamina prima di qualsiasi altra cosa.",
+    "ok": "<code>{fn}</code> ha restituito <code>Ok</code>: il <code>?</code> estrae il valore, lo assegna e l'esecuzione prosegue alla riga successiva.",
+    "err": "<code>{fn}</code> ha restituito <code>Err(e)</code>: il <code>?</code> converte l'errore con <code>From::from(e)</code> in un <code>AppError</code>…",
+    "returnErr": "…e lo restituisce subito. Le righe rimanenti non vengono mai eseguite e il chiamante riceve <code>Err</code>. Nessuno srotolamento dello stack, nessuna eccezione: solo un return anticipato.",
+    "returnOk": "Tutte e tre le chiamate sono riuscite, quindi la funzione arriva all'ultima espressione e restituisce <code>Ok(cfg)</code> al chiamante."
+  }
+}

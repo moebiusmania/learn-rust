@@ -1,0 +1,24 @@
+{
+  "title": "Chi può implementare cosa?",
+  "subtitle": "La orphan rule: clicca su una cella",
+  "local": "locale",
+  "foreign": "std",
+  "allowed": "Consentito",
+  "rejected": "Rifiutato · E0117",
+  "corner": "tipo ↓ · trait →",
+  "intro": "Ogni cella è un <code>impl Trait for Tipo</code> scritto nel <strong>tuo</strong> crate. Selezionane una per vedere perché il compilatore lo accetta o lo rifiuta.",
+  "cells": {
+    "point-describe": "Sia il trait sia il tipo sono tuoi. Tutto è permesso.",
+    "point-display": "Il trait è esterno ma <code>Point</code> è locale, quindi il tuo crate è l'unico posto in cui questo impl potrà mai esistere. È così che rendi stampabili con <code>{}</code> i tuoi tipi.",
+    "point-iterator": "Consentito per lo stesso motivo: il tipo è locale. Fornisci <code>type Item</code> e <code>fn next</code>, e tutti gli adattatori degli iteratori diventano disponibili su <code>Point</code>.",
+    "i32-describe": "Un trait locale si può implementare per tipi esterni. È il pattern dell'<strong>extension trait</strong>: aggiungi metodi a <code>i32</code>, visibili ovunque il tuo trait sia in scope.",
+    "i32-display": "Sia <code>Display</code> sia <code>i32</code> appartengono a std, che ha già questo impl. Se il tuo crate potesse aggiungerne uno, due crate potrebbero aggiungerne di in conflitto: la coerenza lo vieta.",
+    "i32-iterator": "Trait esterno, tipo esterno. Solo std potrebbe scrivere questo impl. Avvolgi il valore in un newtype (<code>struct Counter(i32);</code>) per implementarlo tu.",
+    "vecT-describe": "Una <strong>blanket impl</strong> su un tipo generico esterno va bene quando il trait è locale: <code>impl&lt;T&gt; Describe for Vec&lt;T&gt;</code>.",
+    "vecT-display": "<code>Vec</code> e <code>Display</code> sono entrambi esterni. std lo omette di proposito, perché non esiste un unico modo giusto di mostrare una lista.",
+    "vecT-iterator": "Trait esterno, tipo esterno. Nota che <code>Vec</code> non è di per sé un iteratore: implementa invece <code>IntoIterator</code>.",
+    "vecPoint-describe": "Trait locale: consentito, e più specifico di una blanket impl su <code>Vec&lt;T&gt;</code> (non puoi averle entrambe, si sovrapporrebbero).",
+    "vecPoint-display": "Sorprendente ma rifiutato: un tipo locale <em>dentro</em> uno esterno non rende locale <code>Vec&lt;Point&gt;</code>. Usa un newtype: <code>struct Points(Vec&lt;Point&gt;);</code>",
+    "vecPoint-iterator": "Rifiutato per lo stesso motivo. Ancora una volta la via d'uscita è un newtype attorno al vettore."
+  }
+}

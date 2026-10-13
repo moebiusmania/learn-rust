@@ -1,0 +1,257 @@
+---
+/**
+ * Rc<T> internals: three stack slots pointing at one heap block that holds
+ * the strong count, the weak count and the value.
+ */
+import WidgetFrame from '@/components/content/WidgetFrame.astro';
+import Icon from '@/components/Icon.astro';
+import { getLang, widgetStrings } from '@/i18n';
+import { highlightRust } from '@/scripts/rust-highlight';
+
+interface Strings {
+  title: string; subtitle: string; stack: string; heap: string;
+  strong: string; weak: string; dropped: string; freed: string; empty: string;
+  buttons: Record<'clone' | 'downgrade' | 'upgrade' | 'drop' | 'reset', string>;
+  captions: Record<string, string>;
+}
+const s = widgetStrings<Strings>(getLang(Astro), 'rc-visualizer');
+const vars = ['a', 'b', 'c'];
+const slotY = (i: number) => 34 + i * 72;
+const arrive = (i: number) => 112 + i * 22;
+const firstLine = 'let a = Rc::new(vec![1, 2, 3]);';
+---
+<WidgetFrame
+  tag="rc-visualizer"
+  title={s.title}
+  subtitle={s.subtitle}
+  icon="link"
+  data-captions={JSON.stringify(s.captions)}
+  data-empty={s.empty}
+>
+  <svg class="rcv" viewBox="0 0 560 250" role="img" aria-label={s.title}>
+    <defs>
+      <marker id="rcv-strong" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 10 5 0 10z" fill="var(--owner)" />
+      </marker>
+      <marker id="rcv-weak" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 10 5 0 10z" fill="var(--borrow)" />
+      </marker>
+    </defs>
+
+    <text x="20" y="20" class="lbl lbl-stack">{s.stack}</text>
+    <text x="320" y="20" class="lbl lbl-heap">{s.heap}</text>
+
+    {vars.map((v, i) => (
+      <path
+        class="edge"
+        data-edge={i}
+        pathLength="1"
+        d={`M176 ${slotY(i) + 24} C 240 ${slotY(i) + 24}, 250 ${arrive(i)}, 316 ${arrive(i)}`}
+      />
+    ))}
+
+    {vars.map((v, i) => (
+      <g class="slot" data-slot={i} transform={`translate(20 ${slotY(i)})`}>
+        <rect width="156" height="48" rx="10" />
+        <text x="14" y="29" class="var">{v}</text>
+        <text x="142" y="29" text-anchor="end" class="kind" data-kind />
+      </g>
+    ))}
+
+    <g class="rcbox">
+      <rect x="320" y="64" width="220" height="150" rx="14" class="box" />
+      <text x="336" y="88" class="box-title">RcBox&lt;Vec&lt;i32&gt;&gt;</text>
+      <line x1="320" y1="98" x2="540" y2="98" class="sep" />
+      <text x="336" y="122" class="field">{s.strong}</text>
+      <text x="524" y="122" text-anchor="end" class="count" data-strong>1</text>
+      <text x="336" y="146" class="field">{s.weak}</text>
+      <text x="524" y="146" text-anchor="end" class="count" data-weak>0</text>
+      <g class="value">
+        <rect x="336" y="160" width="188" height="38" rx="8" />
+        <text x="430" y="184" text-anchor="middle">vec![1, 2, 3]</text>
+      </g>
+      <text x="430" y="184" text-anchor="middle" class="dropped-label">{s.dropped}</text>
+    </g>
+    <text x="430" y="238" text-anchor="middle" class="freed-label">{s.freed}</text>
+  </svg>
+
+  <pre class="code-lines rcv-log" aria-label="code"><span class="ln is-active" set:html={highlightRust(firstLine)} /></pre>
+  <div class="widget-caption" aria-live="polite" data-caption set:html={s.captions.start} />
+
+  <div class="widget-controls">
+    <button type="button" class="btn btn-sm" data-op="clone">{s.buttons.clone}</button>
+    <button type="button" class="btn btn-sm" data-op="downgrade">{s.buttons.downgrade}</button>
+    <button type="button" class="btn btn-sm" data-op="upgrade">{s.buttons.upgrade}</button>
+    {vars.map((v, i) => (
+      <button type="button" class="btn btn-sm btn-ghost" data-op="drop" data-index={i}><code>{s.buttons.drop}({v})</code></button>
+    ))}
+    <button type="button" class="btn btn-sm btn-ghost" data-op="reset"><Icon name="reset" size={14} />{s.buttons.reset}</button>
+  </div>
+</WidgetFrame>
+
+<script>
+  import { highlightRust } from '@/scripts/rust-highlight';
+
+  type Kind = 'rc' | 'weak' | null;
+  const NAMES = ['a', 'b', 'c'];
+
+  class RcVisualizer extends HTMLElement {
+    #slots: Kind[] = [];
+    #strong = 0;
+    #weak = 0;
+    #alive = true;
+    #freed = false;
+    #log: string[] = [];
+    #captions: Record<string, string> = {};
+
+    connectedCallback() {
+      this.#captions = JSON.parse(this.dataset.captions ?? '{}');
+      this.querySelectorAll<HTMLButtonElement>('[data-op]').forEach((b) =>
+        b.addEventListener('click', () => this.#op(b.dataset.op!, Number(b.dataset.index))),
+      );
+      this.#reset();
+    }
+
+    #reset() {
+      this.#slots = ['rc', null, null];
+      this.#strong = 1;
+      this.#weak = 0;
+      this.#alive = true;
+      this.#freed = false;
+      this.#log = ['let a = Rc::new(vec![1, 2, 3]);'];
+      this.#render('start');
+    }
+
+    #op(op: string, index: number) {
+      const src = this.#slots.indexOf('rc');
+      const empty = this.#slots.indexOf(null);
+      const weakIdx = this.#slots.indexOf('weak');
+      switch (op) {
+        case 'reset':
+          return this.#reset();
+        case 'clone':
+          this.#slots[empty] = 'rc';
+          this.#strong++;
+          this.#log.push(`let ${NAMES[empty]} = Rc::clone(&${NAMES[src]});`);
+          return this.#render('clone', empty);
+        case 'downgrade':
+          this.#slots[empty] = 'weak';
+          this.#weak++;
+          this.#log.push(`let ${NAMES[empty]} = Rc::downgrade(&${NAMES[src]});`);
+          return this.#render('downgrade', empty);
+        case 'upgrade':
+          if (!this.#alive) {
+            this.#log.push(`${NAMES[weakIdx]}.upgrade(); // None`);
+            return this.#render('upgradeNone', weakIdx);
+          }
+          this.#slots[empty] = 'rc';
+          this.#strong++;
+          this.#log.push(`let ${NAMES[empty]} = ${NAMES[weakIdx]}.upgrade().unwrap();`);
+          return this.#render('upgradeOk', empty);
+        case 'drop': {
+          const kind = this.#slots[index];
+          this.#slots[index] = null;
+          this.#log.push(`drop(${NAMES[index]});`);
+          let key: string;
+          if (kind === 'rc') {
+            this.#strong--;
+            if (this.#strong > 0) key = 'dropStrong';
+            else {
+              this.#alive = false;
+              key = this.#weak === 0 ? 'freedAll' : 'dropLast';
+            }
+          } else {
+            this.#weak--;
+            key = this.#strong === 0 && this.#weak === 0 ? 'freedAfterWeak' : 'dropWeak';
+          }
+          this.#freed = this.#strong === 0 && this.#weak === 0;
+          return this.#render(key, index);
+        }
+      }
+    }
+
+    #render(captionKey: string, varIndex = 0) {
+      const empty = this.#slots.indexOf(null);
+      this.#slots.forEach((kind, i) => {
+        const g = this.querySelector<SVGGElement>(`[data-slot="${i}"]`)!;
+        g.dataset.state = kind ?? 'empty';
+        g.querySelector('[data-kind]')!.textContent = kind === 'rc' ? 'Rc<Vec>' : kind === 'weak' ? 'Weak<Vec>' : this.dataset.empty!;
+        const edge = this.querySelector<SVGPathElement>(`[data-edge="${i}"]`)!;
+        edge.dataset.state = this.#freed ? 'empty' : (kind ?? 'empty');
+        edge.setAttribute('marker-end', kind === 'rc' ? 'url(#rcv-strong)' : kind === 'weak' ? 'url(#rcv-weak)' : '');
+      });
+      this.querySelector('[data-strong]')!.textContent = String(this.#strong);
+      this.querySelector('[data-weak]')!.textContent = String(this.#weak);
+      const box = this.querySelector<SVGGElement>('.rcbox')!;
+      box.classList.toggle('is-dead', !this.#alive);
+      this.querySelector('.rcv')!.classList.toggle('is-freed', this.#freed);
+
+      const log = this.querySelector<HTMLElement>('.rcv-log')!;
+      log.style.counterReset = `ln ${Math.max(0, this.#log.length - 5)}`;
+      log.innerHTML = this.#log
+        .slice(-5)
+        .map((l, i, arr) => `<span class="ln${i === arr.length - 1 ? ' is-active' : ''}">${highlightRust(l)}</span>`)
+        .join('');
+
+      const caption = (this.#captions[captionKey] ?? '').replaceAll('{v}', `<code>${NAMES[varIndex]}</code>`);
+      this.querySelector('[data-caption]')!.innerHTML = caption;
+
+      const has = (k: Kind) => this.#slots.includes(k);
+      const set = (op: string, enabled: boolean) =>
+        this.querySelectorAll<HTMLButtonElement>(`[data-op="${op}"]`).forEach((b) => (b.disabled = !enabled));
+      set('clone', !this.#freed && has('rc') && empty >= 0);
+      set('downgrade', !this.#freed && has('rc') && empty >= 0);
+      set('upgrade', has('weak') && (!this.#alive || empty >= 0));
+      this.querySelectorAll<HTMLButtonElement>('[data-op="drop"]').forEach(
+        (b) => (b.disabled = this.#slots[Number(b.dataset.index)] === null),
+      );
+    }
+  }
+  customElements.define('rc-visualizer', RcVisualizer);
+</script>
+
+<style>
+  rc-visualizer { display: block; }
+  .rcv { inline-size: 100%; overflow: visible; font-family: var(--font-mono); }
+  .lbl { font: 700 11px var(--font-sans); letter-spacing: 0.16em; }
+  .lbl-stack { fill: var(--stack); }
+  .lbl-heap { fill: var(--heap); }
+
+  .slot rect { fill: var(--surface); stroke: var(--border-strong); transition: stroke var(--dur), fill var(--dur), opacity var(--dur); }
+  .slot .var { font-size: 15px; font-weight: 700; fill: var(--text); }
+  .slot .kind { font-size: 11px; fill: var(--text-faint); }
+  .slot[data-state='rc'] rect { stroke: var(--owner); fill: color-mix(in oklch, var(--owner) 8%, var(--surface)); }
+  .slot[data-state='rc'] .kind { fill: var(--owner); }
+  .slot[data-state='weak'] rect { stroke: var(--borrow); stroke-dasharray: 5 4; fill: color-mix(in oklch, var(--borrow) 8%, var(--surface)); }
+  .slot[data-state='weak'] .kind { fill: var(--borrow); }
+  .slot[data-state='empty'] { opacity: 0.55; }
+  .slot[data-state='empty'] rect { stroke-dasharray: 2 4; }
+
+  .edge {
+    fill: none; stroke-width: 2.2; stroke-linecap: round;
+    stroke-dasharray: 1; stroke-dashoffset: 1; opacity: 0;
+    transition: stroke-dashoffset 500ms var(--ease-out), opacity var(--dur);
+  }
+  .edge[data-state='rc'] { stroke: var(--owner); stroke-dashoffset: 0; opacity: 1; }
+  .edge[data-state='weak'] { stroke: var(--borrow); stroke-dasharray: 0.03 0.025; stroke-dashoffset: 0; opacity: 1; }
+
+  .box { fill: color-mix(in oklch, var(--heap) 7%, var(--surface)); stroke: var(--heap); stroke-opacity: 0.6; transition: opacity 500ms, scale 500ms var(--ease-out); }
+  .box-title { font-size: 12px; font-weight: 700; fill: var(--heap); }
+  .sep { stroke: color-mix(in oklch, var(--heap) 30%, transparent); }
+  .field { font-size: 12px; fill: var(--text-muted); }
+  .count { font-size: 15px; font-weight: 700; fill: var(--text); }
+  .value rect { fill: var(--surface); stroke: color-mix(in oklch, var(--heap) 45%, transparent); }
+  .value text { font-size: 13px; fill: var(--text); }
+  .value { transition: opacity 500ms, translate 500ms var(--ease-out); }
+  .dropped-label { font: 600 12px var(--font-sans); fill: var(--invalid); opacity: 0; transition: opacity 400ms 200ms; }
+  .rcbox.is-dead .value { opacity: 0; translate: 0 10px; }
+  .rcbox.is-dead .dropped-label { opacity: 1; }
+  .rcbox { transform-origin: 430px 140px; transition: opacity 500ms, scale 500ms var(--ease-out); }
+  .is-freed .rcbox { opacity: 0.25; scale: 0.94; }
+  .is-freed .box { stroke-dasharray: 6 5; }
+  .freed-label { font: 600 12px var(--font-sans); fill: var(--invalid); opacity: 0; transition: opacity 400ms; }
+  .is-freed .freed-label { opacity: 1; }
+
+  .rcv-log { min-block-size: 3.6rem; }
+  .widget-controls code { font-size: 0.78rem; background: none; border: 0; padding: 0; color: inherit; }
+</style>

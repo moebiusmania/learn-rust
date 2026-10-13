@@ -1,0 +1,23 @@
+{
+  "title": "Laboratorio di data race",
+  "subtitle": "N thread incrementano K volte ciascuno un contatore condiviso",
+  "modes": { "race": "Non sincronizzato", "mutex": "Mutex", "atomic": "AtomicUsize" },
+  "threads": "Thread",
+  "increments": "Incrementi per thread",
+  "run": "Esegui",
+  "reset": "Ripristina",
+  "expected": "Atteso",
+  "actual": "Effettivo",
+  "lost": "Aggiornamenti persi",
+  "counter": "contatore",
+  "waiting": "in attesa del lock",
+  "read": "lettura",
+  "write": "scrittura",
+  "add": "fetch_add",
+  "captions": {
+    "race": "Ogni incremento è una <code>lettura</code> seguita da una <code>scrittura</code>. Se lo scheduler cambia thread nel mezzo, due thread leggono lo stesso valore e una scrittura sovrascrive l'altra: un aggiornamento va <strong>perso</strong>. È quello che C, C++, Java o Go ti lasciano compilare. In Rust questa versione viene rifiutata prima ancora di poter girare:",
+    "mutex": "Un thread deve tenere il lock per l'intera sequenza lettura–somma–scrittura. Gli altri restano bloccati finché non viene rilasciato. Il risultato è sempre corretto; il prezzo è la contesa, visibile nei thread <strong>in attesa</strong>. In Rust i dati stanno <em>dentro</em> il <code>Mutex</code>, quindi non puoi toccarli senza prendere il lock.",
+    "atomic": "<code>fetch_add</code> esegue lettura–modifica–scrittura come un'unica istruzione indivisibile della CPU (per esempio <code>lock xadd</code> su x86). Nessun lock, nessun aggiornamento perso, ma funziona solo con valori semplici come interi, booleani e puntatori."
+  },
+  "compileError": "error[E0499]: cannot borrow `counter` as mutable more than once at a time"
+}

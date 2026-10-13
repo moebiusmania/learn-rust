@@ -1,0 +1,250 @@
+---
+title: Error handling without exceptions
+description: Panics for bugs, Result for expected failures, the ? operator for propagation, and how to design error types for libraries and applications.
+duration: 25
+tags: [Result, Option, "? operator", panic, Error trait]
+---
+
+Rust has no exceptions. A function that can fail says so in its **return type**, and the caller must do something with the failure before getting at the value. This feels verbose for about a week; after that, most developers find it hard to go back to not knowing which calls can throw.
+
+## Two kinds of failure
+
+Rust separates failures into two categories and gives each its own mechanism:
+
+| | Recoverable error | Bug / broken invariant |
+| --- | --- | --- |
+| Examples | File not found, invalid user input, network timeout | Index out of bounds, `unwrap()` on `None`, integer overflow in debug |
+| Mechanism | `Result<T, E>` returned as a value | `panic!`: unwind the thread and stop |
+| Visible in the signature | Yes | No |
+| Caller's job | Handle or propagate it | Nothing: fix the code |
+
+<Playground title="Result for expected failures, panic for bugs">
+```rust
+use std::num::ParseIntError;
+
+fn parse_port(s: &str) -> Result<u16, ParseIntError> {
+    s.trim().parse::<u16>()
+}
+
+fn main() {
+    for input in ["8080", " 443 ", "http", "70000"] {
+        match parse_port(input) {
+            Ok(port) => println!("{input:?} -> port {port}"),
+            Err(e) => println!("{input:?} -> error: {e}"),
+        }
+    }
+
+    let v = vec![1, 2, 3];
+    // When absence is a normal case, ask for an Option...
+    println!("{:?} {:?}", v.get(1), v.get(10));
+    // ...indexing out of bounds is a bug: it panics.
+    let boom = v[10];
+    println!("unreachable: {boom}");
+}
+```
+</Playground>
+
+The first four lines are ordinary control flow. The last line is a crash with a clear message, a source location and exit code 101. `unwrap()` and `expect("why this cannot fail")` convert a `None` or an `Err` into a panic: fine in tests, prototypes and when an invariant truly guarantees success, a code smell everywhere else.
+
+<Callout type="runtime" title="What a panic actually does">
+By default a panic **unwinds** the stack of the current thread: every live value is dropped in reverse order, so files are closed and locks released, then the thread ends. If it is the main thread, the process exits with code 101. Another thread's panic can be observed through `JoinHandle::join`. With `panic = "abort"` in the Cargo profile the process aborts immediately instead, which makes binaries smaller and is common in embedded code. Panics are not exceptions: `catch_unwind` exists for FFI boundaries and thread pools, not for control flow.
+</Callout>
+
+## Result and Option are ordinary enums
+
+There is no special machinery behind them:
+
+```rust
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+```
+
+Because they are plain values you can store them, put them in a `Vec`, and transform them with methods instead of nesting `match` everywhere. The most useful combinators:
+
+| Method | On | What it does |
+| --- | --- | --- |
+| `map(f)` | both | Transform the success value, keep the failure |
+| `and_then(f)` | both | Chain another fallible step (`flatMap`) |
+| `unwrap_or(v)` / `unwrap_or_default()` | both | Fall back to a value |
+| `ok_or(err)` | `Option` | Turn `None` into a specific `Err` |
+| `ok()` | `Result` | Discard the error, keep an `Option` |
+| `map_err(f)` | `Result` | Transform or enrich the error |
+
+<Playground title="Combinators instead of nested checks">
+```rust
+fn main() {
+    let config = [("port", "8080"), ("workers", "four"), ("debug", "true")];
+    let lookup = |key: &str| config.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
+
+    // Option combinators: no if/else, no null checks
+    let port: u16 = lookup("port").and_then(|v| v.parse().ok()).unwrap_or(80);
+    let timeout = lookup("timeout").map(|v| v.len()).unwrap_or_default();
+    println!("port={port} timeout={timeout}");
+
+    // Option -> Result with ok_or, then enrich the error with map_err
+    let workers: Result<u32, String> = lookup("workers")
+        .ok_or("missing key `workers`".to_string())
+        .and_then(|v| v.parse::<u32>().map_err(|e| format!("bad workers {v:?}: {e}")));
+    println!("{workers:?}");
+
+    let host: Result<&str, &str> = lookup("host").ok_or("missing key `host`");
+    println!("{host:?}");
+}
+```
+</Playground>
+
+## The ? operator
+
+Most of the time a function cannot handle an error itself and wants to pass it to its caller. That is what `?` does: applied to a `Result`, it either unwraps the `Ok` value or **returns early** from the enclosing function with the `Err`. Choose which call fails and step through it:
+
+<QuestionMarkFlow />
+
+Two details hidden in that expansion matter:
+
+1. `?` can only be used inside a function that itself returns `Result` (or `Option`, for `Option` values). Propagation is visible in every signature along the way.
+2. The error goes through `From::from` before being returned. That is how a low-level `ParseIntError` becomes your application's error type without any explicit conversion at the call site.
+
+<Compare left="Go">
+```go
+func loadConfig(path string) (*Config, error) {
+    text, err := readFile(path)
+    if err != nil {
+        return nil, err
+    }
+    raw, err := parseToml(text)
+    if err != nil {
+        return nil, err
+    }
+    return validate(raw)
+}
+```
+
+```rust
+fn load_config(path: &str) -> Result<Config, AppError> {
+    let text = read_file(path)?;
+    let raw = parse_toml(&text)?;
+    let cfg = validate(raw)?;
+    Ok(cfg)
+}
+```
+</Compare>
+
+Same semantics as Go's explicit checks, with one difference that matters: in Go you can forget to look at `err` and use a nil `text`; in Rust there is no `text` until the `Result` has been opened.
+
+## Designing error types
+
+For a library, the idiomatic error is an **enum** with one variant per failure mode, implementing `Display` (the human-readable message), `std::error::Error` (the common interface) and `From` for each underlying error you want `?` to convert automatically.
+
+<Playground title="A custom error enum with From conversions">
+```rust
+use std::fmt;
+use std::num::ParseIntError;
+
+#[derive(Debug)]
+enum ConfigError {
+    Missing(&'static str),
+    BadNumber(ParseIntError),
+    OutOfRange(u32),
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConfigError::Missing(key) => write!(f, "missing key `{key}`"),
+            ConfigError::BadNumber(e) => write!(f, "not a number ({e})"),
+            ConfigError::OutOfRange(n) => write!(f, "{n} is outside 1..=64"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+// This impl is what lets `?` turn a ParseIntError into a ConfigError
+impl From<ParseIntError> for ConfigError {
+    fn from(e: ParseIntError) -> Self {
+        ConfigError::BadNumber(e)
+    }
+}
+
+fn parse_workers(line: &str) -> Result<u32, ConfigError> {
+    let value = line.strip_prefix("workers=").ok_or(ConfigError::Missing("workers"))?;
+    let n: u32 = value.parse()?; // ParseIntError -> ConfigError via From
+    if !(1..=64).contains(&n) {
+        return Err(ConfigError::OutOfRange(n));
+    }
+    Ok(n)
+}
+
+fn main() {
+    for line in ["workers=8", "threads=8", "workers=eight", "workers=512"] {
+        match parse_workers(line) {
+            Ok(n) => println!("{line:<14} ok: {n} workers"),
+            Err(e) => println!("{line:<14} error: {e}"),
+        }
+    }
+}
+```
+</Playground>
+
+Callers can `match` on `ConfigError` to react differently to a missing key and to a bad number. Remove the `From` implementation and the `?` on `value.parse()` stops compiling, because the compiler no longer knows how to turn one error type into the other. The same thing happens here, where the target error is a plain `String`:
+
+<Playground title="? needs a From conversion" expectError>
+```rust
+fn double(s: &str) -> Result<i32, String> {
+    let n: i32 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn main() {
+    println!("{:?}", double("21"));
+}
+```
+</Playground>
+
+### `Box<dyn Error>` for applications
+
+In application code you often just want to bubble any error up and print it. `Box<dyn Error>` is a heap-allocated "any error" type: every type implementing `Error` converts into it through `?`, and so does a `&str` message. `main` itself may return a `Result`; if it returns `Err`, Rust prints the error's `Debug` form and exits with code 1.
+
+<Playground title="Box<dyn Error> and main returning Result">
+```rust
+use std::error::Error;
+
+fn average(csv: &str) -> Result<f64, Box<dyn Error>> {
+    if csv.trim().is_empty() {
+        return Err("empty input".into()); // &str -> Box<dyn Error>
+    }
+    let mut total = 0.0;
+    let mut count = 0;
+    for field in csv.split(',') {
+        total += field.trim().parse::<f64>()?; // ParseFloatError, boxed by ?
+        count += 1;
+    }
+    Ok(total / count as f64)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    println!("{:.2}", average("3, 4.5, 6")?);
+    println!("{:.2}", average("1, two, 3")?); // main returns this Err
+    println!("never printed");
+    Ok(())
+}
+```
+</Playground>
+
+<Callout type="tip" title="thiserror and anyhow">
+Two crates cover nearly all real-world needs. **thiserror** generates the `Display`, `Error` and `From` boilerplate of a library error enum from attributes such as `#[error("missing key {0}")]` and `#[from]`. **anyhow** provides `anyhow::Result<T>`, a better `Box<dyn Error>` that can attach context: `read(path).with_context(|| format!("reading {path}"))?`. The rule of thumb: thiserror for libraries, whose callers need to match on errors; anyhow for applications, which mostly need to report them.
+</Callout>
+
+<Callout type="compare" from="Java / Python">
+Checked exceptions in Java tried to put failures in signatures but propagated implicitly and could not be abstracted over generically. Python and JavaScript exceptions are invisible in signatures entirely. Rust's approach is closer to functional languages: errors are values, propagation is explicit but one character long, and the type system knows exactly which errors can reach any given point.
+</Callout>
+
+## Key takeaways
+
+- Use `Result<T, E>` for failures the caller should handle; reserve `panic!` for bugs and broken invariants.
+- A panic unwinds and drops values on the way out; it is not a control-flow mechanism.
+- `Option` and `Result` are ordinary enums with a rich set of combinators (`map`, `and_then`, `ok_or`, `unwrap_or`).
+- `?` returns early with the error after converting it through `From`; it only works in functions that return `Result` or `Option`.
+- Libraries expose error enums (often generated with thiserror); applications use `Box<dyn Error>` or anyhow.

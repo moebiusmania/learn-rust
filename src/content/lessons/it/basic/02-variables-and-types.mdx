@@ -1,0 +1,210 @@
+---
+title: Variabili, tipi ed espressioni
+description: Binding immutabili, shadowing, una gerarchia numerica precisa, gestione esplicita dell'overflow e un linguaggio in cui quasi tutto è un'espressione.
+duration: 20
+tags: [let, mut, shadowing, interi, overflow, espressioni]
+---
+
+Variabili e tipi primitivi di Rust somigliano a quelli che conosci già, ma tre impostazioni di default sono capovolte: i binding sono **immutabili** a meno che tu non dica il contrario, le conversioni numeriche **non sono mai implicite**, e blocchi, `if` e `match` sono **espressioni** che producono valori. Ognuna di queste scelte serve a far dire al codice esattamente quello che fa.
+
+## I binding sono immutabili di default
+
+`let` introduce un *binding*: un nome associato a un valore. Senza `mut`, il binding non può mai essere riassegnato.
+
+<Playground title="Immutabile di default" expectError>
+```rust
+fn main() {
+    let count = 1;
+    count += 1;
+    println!("{count}");
+}
+```
+</Playground>
+
+Il compilatore risponde con `error[E0384]: cannot assign twice to immutable variable` e suggerisce `let mut count`. È l'opposto di JavaScript, dove `let` è mutabile e devi scegliere esplicitamente `const`.
+
+<Compare left="TypeScript">
+```ts
+const limit = 10;      // binding immutabile
+let attempts = 0;      // binding mutabile
+attempts += 1;
+
+const user = { name: "Ada" };
+user.name = "Grace";   // consentito: const è superficiale
+```
+
+```rust
+let limit = 10;          // binding immutabile
+let mut attempts = 0;    // binding mutabile
+attempts += 1;
+
+let user = User { name: "Ada".into() };
+// user.name = "Grace".into(); // errore: non è mutabile
+```
+</Compare>
+
+Guarda l'ultima riga. In Rust la mutabilità è una proprietà del **binding e di tutto ciò che è raggiungibile tramite esso**: un `user` immutabile significa che nemmeno i suoi campi possono cambiare. Non esiste un "const superficiale". Questa immutabilità profonda e verificata dal compilatore è ciò che più avanti permette al borrow checker di ragionare su chi può modificare cosa.
+
+### Shadowing
+
+Puoi dichiarare un nuovo binding con lo stesso nome. Quello vecchio viene *oscurato* (shadowing), non modificato, e quello nuovo può persino avere un tipo diverso. È il modo idiomatico di raffinare un valore in pochi passaggi di trasformazione senza inventare `input2`, `inputTrimmed` e così via.
+
+<Playground title="Shadowing e mutazione">
+```rust
+fn main() {
+    let input = "  42  ";
+    let input = input.trim();                 // &str, oscura l'originale
+    let input: u32 = input.parse().unwrap();  // ora è un u32
+    let input = input * 2;                    // sempre immutabile
+    println!("input = {input}");
+
+    let mut total = 0;                        // stato davvero mutabile
+    for n in 1..=4 {
+        total += n;
+    }
+    println!("totale = {total}");
+}
+```
+</Playground>
+
+Usa `mut` quando un valore cambia davvero nel tempo (un accumulatore, un buffer). Usa lo shadowing quando ogni passaggio produce un valore *nuovo* derivato dal precedente.
+
+### Costanti e static
+
+```rust
+const MAX_RETRIES: u32 = 5;            // copiata in ogni punto d'uso, tipo obbligatorio
+static GREETING: &str = "hello";        // un unico indirizzo fisso nel binario
+```
+
+`const` è un valore calcolato in compilazione, copiato ovunque venga usato; il suo inizializzatore deve essere calcolabile in compilazione (sono ammesse chiamate a `const fn`). `static` ha un'unica posizione in memoria per tutta l'esecuzione del programma. Esiste anche `static mut`, ma ogni accesso richiede `unsafe`, perché lo stato globale mutabile è un data race in attesa di accadere; le alternative sicure (`AtomicU64`, `Mutex`, `OnceLock`) le vedrai nel percorso avanzato.
+
+## Una gerarchia numerica precisa
+
+Rust non ha un tipo "number" e non allarga mai i tipi implicitamente. Ogni tipo intero dichiara dimensione e segno:
+
+| Dimensione | Con segno | Senza segno | Note |
+| --- | --- | --- | --- |
+| 8 bit | `i8` | `u8` | `u8` è il tipo byte |
+| 16 bit | `i16` | `u16` | |
+| 32 bit | `i32` | `u32` | default per i letterali interi |
+| 64 bit | `i64` | `u64` | |
+| 128 bit | `i128` | `u128` | |
+| puntatore | `isize` | `usize` | indici e lunghezze sono `usize` |
+
+I numeri in virgola mobile sono `f32` e `f64` (il default), `bool` occupa un byte e `char` è uno **Unicode scalar value** da 4 byte, non un byte e non un'unità UTF-16. Le stringhe sono UTF-8, quindi `'é'.len_utf8()` vale 2 mentre `size_of::<char>()` vale 4.
+
+Le conversioni sono sempre visibili nel codice:
+
+```rust
+let small: u8 = 200;
+let wide: u32 = small.into();          // senza perdita: esiste From<u8> for u32
+let checked = u8::try_from(300u32);    // può fallire: Err(TryFromIntError)
+let truncated = 300u32 as u8;          // `as` tiene i bit bassi: 44
+let half = 7 / 2;                      // 3: divisione intera
+let ratio = 7 as f64 / 2.0;            // 3.5: devi convertire prima
+```
+
+<Callout type="compare" from="C / Java">
+`int + long` in C o in Java allarga il tipo in silenzio; `byte b = 300` in alcuni linguaggi tronca in silenzio. In Rust sommare un `u8` a un `u32` è un errore di tipo. Preferisci `into()` per le conversioni che non possono perdere informazione e `try_from()` per quelle che possono; riserva `as` ai casi in cui vuoi davvero un troncamento a livello di bit o un cast tra float e interi.
+</Callout>
+
+## L'overflow è una decisione tua
+
+Quanto deve fare `250u8 + 10`? Il C dice "comportamento indefinito" per i tipi con segno e "wrap" per quelli senza; Java fa sempre wrap; Python fa crescere l'intero all'infinito. La risposta di Rust è: **scegli tu, in modo esplicito**, e il `+` di default considera un bug l'eventuale overflow.
+
+<IntegerExplorer />
+
+Prova `i8` con `a = 127, b = 1`: lo schema di bit `0111_1111` più uno diventa `1000_0000`, che in complemento a due si legge `-128`. Poi prova `u8` con `250 + 10`.
+
+<Playground title="Quattro strategie di overflow">
+```rust
+fn main() {
+    let a: u8 = 250;
+    let b: u8 = 10;
+    println!("wrapping:    {}", a.wrapping_add(b));      // 4
+    println!("checked:     {:?}", a.checked_add(b));     // None
+    println!("saturating:  {}", a.saturating_add(b));    // 255
+    println!("overflowing: {:?}", a.overflowing_add(b)); // (4, true)
+
+    let min: i8 = -128;
+    println!("{:?}", min.checked_abs());  // None: +128 non sta in un i8
+    println!("{}", -1i8 as u8);           // 255: stessi bit, nuovo significato
+}
+```
+</Playground>
+
+- `wrapping_*` per hash, checksum e contatori circolari.
+- `checked_*` restituisce un `Option` quando l'overflow significa input non valido.
+- `saturating_*` per cose come volume, avanzamento o contatori di tentativi che devono fermarsi al limite.
+- `overflowing_*` quando ti servono sia il valore dopo il wrap sia il flag di riporto.
+- `std::num::Wrapping<T>` e `Saturating<T>` incapsulano un tipo in modo che il semplice `+` segua quella politica.
+
+<Callout type="runtime">
+Nelle build di release l'aritmetica semplice viene compilata in una singola istruzione della CPU. Nelle build di debug il compilatore aggiunge un controllo di overflow dopo ogni operazione e chiama il gestore dei panic se scatta. Il comportamento dipende dall'impostazione `overflow-checks` del profilo Cargo, quindi puoi mantenere i controlli anche in produzione con `[profile.release] overflow-checks = true`, a un costo contenuto.
+</Callout>
+
+## Tuple e array
+
+Entrambi hanno una dimensione fissata in compilazione e vivono inline (sullo stack, o dentro qualunque cosa li contenga), senza allocazioni sullo heap.
+
+```rust
+let point: (i32, f64, &str) = (3, 4.5, "origine");
+let (x, y, label) = point;          // destrutturazione
+let first = point.0;                // accesso posizionale
+
+let zeros = [0u8; 4];               // [valore; lunghezza], tipo [u8; 4]
+let days = ["lun", "mar", "mer"];   // tipo [&str; 3]
+let day = days[i];                  // con controllo dei limiti
+```
+
+La lunghezza fa parte del tipo: `[u8; 4]` e `[u8; 5]` sono tipi diversi. L'indicizzazione è **sempre controllata**: un indice fuori dai limiti provoca un panic invece di leggere la memoria accanto. Con un indice costante il compilatore si rifiuta persino di compilare. La tupla vuota `()`, chiamata *unit*, è il tipo di "nessun valore significativo", simile a `void`.
+
+## Inferenza dei tipi
+
+L'inferenza è locale al corpo di una funzione ma lavora in entrambe le direzioni: un utilizzo successivo può determinare un tipo precedente.
+
+```rust
+let mut ids = Vec::new();         // per ora Vec<?>
+ids.push(7u16);                   // ...adesso è Vec<u16>
+let n = "12".parse::<i64>()?;     // il "turbofish" sceglie il tipo di destinazione
+let total: u32 = ids.iter().map(|&id| u32::from(id)).sum(); // l'annotazione guida sum()
+```
+
+Le firme delle funzioni non vengono mai inferite: parametri e tipo di ritorno si scrivono sempre. Così gli errori di tipo restano locali e le firme diventano documentazione leggibile.
+
+## Tutto è un'espressione
+
+Un blocco `{ … }` vale quanto la sua ultima espressione, **se quell'espressione non termina con il punto e virgola**. Il punto e virgola trasforma un'espressione in un'istruzione il cui valore è `()`. Questa sola regola spiega perché Rust non ha l'operatore ternario e perché le funzioni di solito non hanno bisogno di `return`.
+
+<Playground title="Blocchi, if e funzioni come espressioni">
+```rust
+fn square(x: i32) -> i32 {
+    x * x            // niente punto e virgola: è il valore di ritorno
+}
+
+fn classify(n: i32) -> &'static str {
+    if n < 0 { "negativo" } else if n == 0 { "zero" } else { "positivo" }
+}
+
+fn main() {
+    let n = -3;
+    let abs = if n < 0 { -n } else { n };  // nessun bisogno del ternario
+    let area = {
+        let side = abs + 1;
+        square(side)                       // valore del blocco
+    };
+    println!("{abs} {area} {}", classify(n));
+}
+```
+</Playground>
+
+Prova ad aggiungere un punto e virgola dopo `x * x`: ora il corpo della funzione vale `()`, e il compilatore segnala `mismatched types: expected i32, found ()`, indicando il punto e virgola e suggerendo di rimuoverlo. Anche i cicli sono espressioni: `let found = loop { … break value; };` restituisce un valore da un `loop`.
+
+## Punti chiave
+
+- `let` è immutabile in modo profondo; aggiungi `mut` solo dove lo stato cambia davvero.
+- Lo shadowing crea un nuovo binding, eventualmente di un nuovo tipo: ideale per i passaggi di parsing e raffinamento.
+- Ogni tipo intero dichiara la sua ampiezza; non ci sono conversioni implicite. Usa `into`, `try_from` e `as` in modo consapevole.
+- L'overflow provoca un panic in debug e fa wrap in release; quando conta, scegli esplicitamente `wrapping_`, `checked_`, `saturating_` o `overflowing_`.
+- Array e tuple hanno dimensione fissa e stanno bene sullo stack; l'indicizzazione è sempre controllata.
+- Blocchi, `if`, `match` e `loop` sono espressioni; un punto e virgola finale trasforma un valore in `()`.

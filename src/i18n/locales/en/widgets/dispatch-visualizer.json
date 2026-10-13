@@ -1,0 +1,25 @@
+{
+  "title": "Static vs dynamic dispatch",
+  "subtitle": "Follow a call to notify() through the generated code",
+  "static": "Static (generics)",
+  "dynamic": "Dynamic (dyn Trait)",
+  "value": "Value",
+  "call": "Animate call",
+  "caller": "call site",
+  "fatPointer": "&dyn Notify (fat pointer)",
+  "dataPtr": "data ptr",
+  "vtablePtr": "vtable ptr",
+  "vtable": "vtable",
+  "data": "data",
+  "copies": "monomorphized copies",
+  "staticFacts": [
+    "One copy of <code>notify</code> per concrete type, generated at compile time.",
+    "The call is a direct jump to a known address: LLVM can inline it.",
+    "<code>&amp;Email</code> is a thin pointer: 8 bytes on 64-bit."
+  ],
+  "dynamicFacts": [
+    "One copy of <code>notify</code>, shared by every type.",
+    "The call loads a function pointer from the vtable, then jumps: no inlining across it.",
+    "<code>&amp;dyn Notify</code> is a fat pointer: 16 bytes (data + vtable)."
+  ]
+}
