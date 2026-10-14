@@ -1,0 +1,60 @@
+---
+/**
+ * <Term id="borrow-checker">borrow checker</Term>
+ * Links a word to its entry in the current track's glossary and shows the
+ * definition on hover/focus. Without children it renders the glossary term.
+ * Pass `track="intermediate"` to link into another track's glossary.
+ * An unknown id fails the build, so typos cannot ship.
+ */
+import { getLang } from '@/i18n';
+import { tracks, type Track } from '@/i18n/config';
+import { getGlossary, inlineCode } from '@/lib/content';
+import { localeUrl } from '@/lib/url';
+
+interface Props { id: string; track?: Track }
+const lang = getLang(Astro);
+const track = Astro.props.track ?? (Astro.params.track as Track);
+if (!tracks.includes(track)) throw new Error(`<Term id="${Astro.props.id}">: cannot infer the track, pass track="…"`);
+
+const glossary = await getGlossary(lang, track);
+const entry = glossary?.terms.find((t) => t.id === Astro.props.id);
+if (!entry) throw new Error(`<Term id="${Astro.props.id}">: no such entry in src/content/glossary/${lang}/${track}.json`);
+
+// Unique per page: names the CSS anchor and links the tooltip for screen readers.
+const n = (Astro.locals as { termCount?: number }).termCount = ((Astro.locals as { termCount?: number }).termCount ?? 0) + 1;
+const tip = `term-tip-${n}`;
+const label = Astro.slots.has('default') ? await Astro.slots.render('default') : inlineCode(entry.term);
+---
+<span class="term" style={`--anchor: --term-${n}`}><a href={`${localeUrl(lang, track, 'glossary')}#${entry.id}`} aria-describedby={tip} set:html={label} /><span class="term-tip" id={tip} role="tooltip"><strong set:html={inlineCode(entry.term)} /> <span set:html={inlineCode(entry.definition)} /></span></span>
+
+<style>
+  .term > a {
+    color: inherit; text-decoration: underline dotted color-mix(in oklch, var(--accent) 70%, transparent);
+    text-decoration-thickness: 1.5px; text-underline-offset: 0.2em;
+    transition: color var(--dur), text-decoration-color var(--dur);
+    &:hover, &:focus-visible { color: var(--accent-strong); text-decoration-color: var(--accent); }
+  }
+  .term-tip { display: none; }
+
+  /* Tooltip only where anchor positioning exists; elsewhere the link alone is enough. */
+  @supports (anchor-name: --a) {
+    .term > a { anchor-name: var(--anchor); }
+    .term-tip {
+      position: fixed; position-anchor: var(--anchor); z-index: 50;
+      position-area: block-start span-all; justify-self: anchor-center; position-try-fallbacks: flip-block;
+      inline-size: max-content; max-inline-size: min(24rem, calc(100vw - 2rem)); margin: 0.4rem;
+      padding: var(--space-3) var(--space-4); border-radius: var(--radius); pointer-events: none;
+      background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow);
+      font-size: var(--step--1); font-weight: 400; font-style: normal; line-height: 1.5; color: var(--text-muted); text-align: start;
+      & strong { color: var(--text); }
+      & :global(code) { font-size: 0.88em; padding: 0.05em 0.3em; border-radius: 4px; background: var(--surface-2); }
+    }
+    .term:has(> a:is(:hover, :focus-visible)) > .term-tip {
+      display: block;
+      @media (prefers-reduced-motion: no-preference) {
+        animation: term-tip-in var(--dur) var(--ease-out);
+      }
+    }
+  }
+  @keyframes term-tip-in { from { opacity: 0; } }
+</style>

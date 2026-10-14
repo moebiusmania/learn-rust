@@ -1,0 +1,172 @@
+---
+import BaseLayout from '@/layouts/BaseLayout.astro';
+import { useTranslations } from '@/i18n';
+import { locales, tracks, type Locale, type Track } from '@/i18n/config';
+import { localeUrl } from '@/lib/url';
+import { getGlossary, getLessons, getTrackInfo, inlineCode, termIdsIn, type Glossary } from '@/lib/content';
+
+export async function getStaticPaths() {
+  const paths = [];
+  for (const lang of locales)
+    for (const track of tracks) {
+      const glossary = await getGlossary(lang, track);
+      if (glossary) paths.push({ params: { lang, track }, props: { glossary } });
+    }
+  return paths;
+}
+
+interface Props { glossary: Glossary }
+const { glossary } = Astro.props;
+const lang = Astro.params.lang as Locale;
+const track = Astro.params.track as Track;
+const { t } = useTranslations(lang);
+const info = await getTrackInfo(lang, track);
+const lessons = await getLessons(lang, track);
+const usedIn = lessons.map((l) => ({ lesson: l, ids: termIdsIn(l) }));
+
+/** Sort and group ignoring leading punctuation and backticks, so `&str` files under S. */
+const sortKey = (term: string) => term.replace(/^[^\p{L}\p{N}]+/u, '');
+const byId = new Map(glossary.terms.map((e) => [e.id, e]));
+const sorted = [...glossary.terms].sort((a, b) =>
+  sortKey(a.term).localeCompare(sortKey(b.term), lang, { sensitivity: 'base' }),
+);
+const groups = new Map<string, typeof sorted>();
+for (const e of sorted) {
+  const letter = sortKey(e.term).charAt(0).toLocaleUpperCase(lang);
+  groups.set(letter, [...(groups.get(letter) ?? []), e]);
+}
+const title = `${t('glossary.title')} · ${info.title}`;
+---
+<BaseLayout lang={lang} title={title} description={glossary.intro} currentTrack={track}>
+  <div class="container glossary">
+    <nav class="crumbs" aria-label="breadcrumb">
+      <a href={localeUrl(lang)}>{t('nav.home')}</a><span class="sep">/</span>
+      <a href={localeUrl(lang, track)}>{info.title}</a><span class="sep">/</span>
+      <span>{t('glossary.title')}</span>
+    </nav>
+
+    <header class="glossary-head">
+      <p class="eyebrow">{info.title}</p>
+      <h1>{t('glossary.title')}</h1>
+      <p class="intro">{glossary.intro}</p>
+      <p class="muted">{t('glossary.count', { count: glossary.terms.length })}</p>
+    </header>
+
+    <div class="glossary-tools">
+      <input type="search" class="glossary-filter" placeholder={t('glossary.filter')} aria-label={t('glossary.filter')} />
+      <nav class="letters" aria-label={t('glossary.letters')}>
+        {[...groups.keys()].map((letter) => <a href={`#letter-${letter}`}>{letter}</a>)}
+      </nav>
+    </div>
+    <p class="glossary-empty muted" hidden>{t('glossary.noMatch')}</p>
+
+    {
+      [...groups].map(([letter, entries]) => (
+        <section class="letter-group" aria-labelledby={`letter-${letter}`}>
+          <h2 id={`letter-${letter}`}>{letter}</h2>
+          <dl>
+            {entries.map((e) => {
+              const lessonsUsing = usedIn.filter((u) => u.ids.has(e.id)).map((u) => u.lesson);
+              return (
+                <div class="entry" id={e.id} data-search={[e.term, ...e.aka, e.definition].join(' ').toLocaleLowerCase(lang)}>
+                  <dt>
+                    <a class="self" href={`#${e.id}`} set:html={inlineCode(e.term)} />
+                    {e.aka.length > 0 && <span class="aka">{t('glossary.aka')} <span set:html={e.aka.map(inlineCode).join(', ')} /></span>}
+                  </dt>
+                  <dd>
+                    <p set:html={inlineCode(e.definition)} />
+                    {e.see.length > 0 && (
+                      <p class="meta">
+                        <span>{t('glossary.see')}</span>
+                        {e.see.map((id) => <a href={`#${id}`} set:html={inlineCode(byId.get(id)!.term)} />)}
+                      </p>
+                    )}
+                    {lessonsUsing.length > 0 && (
+                      <p class="meta">
+                        <span>{t('glossary.usedIn')}</span>
+                        {lessonsUsing.map((l) => <a href={localeUrl(lang, track, l.slug)}>{l.entry.data.title}</a>)}
+                      </p>
+                    )}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        </section>
+      ))
+    }
+  </div>
+</BaseLayout>
+
+<script>
+  // Client-side filter over term, aliases and definition.
+  const input = document.querySelector<HTMLInputElement>('.glossary-filter');
+  const entries = [...document.querySelectorAll<HTMLElement>('.glossary .entry')];
+  const groups = [...document.querySelectorAll<HTMLElement>('.glossary .letter-group')];
+  const empty = document.querySelector<HTMLElement>('.glossary-empty');
+  input?.addEventListener('input', () => {
+    const q = input.value.trim().toLocaleLowerCase(document.documentElement.lang);
+    entries.forEach((e) => (e.hidden = !!q && !e.dataset.search!.includes(q)));
+    groups.forEach((g) => (g.hidden = !g.querySelector('.entry:not([hidden])')));
+    if (empty) empty.hidden = groups.some((g) => !g.hidden);
+  });
+</script>
+
+<style>
+  .glossary { max-inline-size: 60rem; }
+  .glossary-head {
+    padding-block: var(--space-4) var(--space-5);
+    & h1 { font-size: var(--step-4); margin-block: var(--space-2) var(--space-4); letter-spacing: -0.035em; }
+    & .intro { font-size: var(--step-1); color: var(--text-muted); max-inline-size: 46rem; line-height: 1.55; margin-block-end: var(--space-2); }
+  }
+
+  .glossary-tools {
+    position: sticky; inset-block-start: var(--header-h); z-index: 5;
+    display: grid; gap: var(--space-3); padding-block: var(--space-3);
+    background: var(--bg); border-block-end: 1px solid var(--border);
+  }
+  .glossary-filter {
+    inline-size: 100%; padding: 0.6rem 0.9rem; font: inherit; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  }
+  .letters {
+    display: flex; flex-wrap: wrap; gap: 0.15rem;
+    & a {
+      min-inline-size: 1.9rem; padding: 0.2rem 0.4rem; text-align: center; border-radius: var(--radius-s);
+      font: 600 0.8rem var(--font-mono); color: var(--text-muted); text-decoration: none;
+      &:hover { background: var(--surface-2); color: var(--accent-strong); }
+    }
+  }
+  .glossary-empty { padding-block: var(--space-5); }
+
+  .letter-group {
+    padding-block-start: var(--space-5);
+    & h2 {
+      font: 800 var(--step-2) var(--font-mono); color: var(--accent); opacity: 0.7;
+      scroll-margin-block-start: calc(var(--header-h) + 7rem);
+    }
+    & dl { display: grid; gap: var(--space-3); margin-block-start: var(--space-3); }
+  }
+
+  .entry {
+    padding: var(--space-4) var(--space-5); border-radius: var(--radius);
+    background: var(--surface); border: 1px solid var(--border);
+    scroll-margin-block-start: calc(var(--header-h) + 7rem);
+    transition: border-color var(--dur), box-shadow var(--dur);
+    &:target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    & dt { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); }
+    & .self { font-weight: 650; font-size: var(--step-0); color: var(--text); text-decoration: none; &:hover { color: var(--accent-strong); } }
+    & .aka { font-size: var(--step--1); color: var(--text-faint); }
+    & dd { margin: var(--space-2) 0 0; display: grid; gap: var(--space-2); color: var(--text-muted); }
+    & .meta {
+      display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--step--1);
+      & span { color: var(--text-faint); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; align-self: center; }
+      & a { color: var(--accent-strong); }
+    }
+    & :global(code) {
+      padding: 0.08em 0.35em; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--border);
+      font-size: 0.85em;
+    }
+  }
+</style>

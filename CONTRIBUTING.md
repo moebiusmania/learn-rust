@@ -9,6 +9,7 @@ fix a sentence or a translation without touching any component.
 | --- | --- |
 | Lessons (MDX) | `src/content/lessons/<lang>/<track>/<NN>-<slug>.mdx` |
 | Track metadata + "key concepts" | `src/content/tracks/<lang>/<track>.json` |
+| Track glossary | `src/content/glossary/<lang>/<track>.json` |
 | UI strings (nav, buttons, home page) | `src/i18n/locales/<lang>/ui.json` |
 | Widget strings | `src/i18n/locales/<lang>/widgets/<widget-name>.json` |
 | Interactive widgets | `src/components/widgets/<WidgetName>.astro` |
@@ -69,6 +70,28 @@ fn main() {
   Every Playground snippet must compile (or fail as intended) with
   `rustc --edition 2024`. Verify it locally before committing.
 - Plain fenced ```` ```rust ```` blocks are static, use them for fragments.
+
+### Glossary terms
+
+Each track can have a glossary (`src/content/glossary/<lang>/<track>.json`), rendered at
+`/<lang>/<track>/glossary/` and linked from the track page and the lesson sidebar. Entries
+have an `id` (kebab-case, shared by all languages), `term`, optional `aka` aliases, a
+`definition` and optional `see` (related ids). Backticks in these strings render as code.
+
+In a lesson, link a word to its entry with `<Term>`; the visible text is up to you, and the
+definition appears on hover:
+
+```mdx
+The *<Term id="borrow-checker">borrow checker</Term>* enforces one rule.
+<Term id="option">`Option<T>`</Term> replaces null.
+```
+
+- Tag the **first** prose occurrence of each glossary term in a lesson, not every one.
+- Never inside headings, code blocks, `<Compare>`, `<Playground>` or component attributes,
+  and not in "Key takeaways". Keep `<Term>` and `</Term>` on the same line.
+- An unknown id fails the build. A new term needs an entry in **every** language's
+  glossary, with the same id. The glossary page lists which lessons use each term.
+- `<Term>` uses the current track's glossary; pass `track="basic"` to link elsewhere.
 
 ### MDX pitfalls
 

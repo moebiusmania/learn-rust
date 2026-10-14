@@ -1,24 +1,24 @@
 ---
 title: Toolchain, Cargo and the compilation model
 description: What you install, what Cargo does for you, and what happens between your .rs files and a native binary.
-duration: 15
+duration: 20
 tags: [rustup, cargo, rustc, editions]
 ---
 
-If you come from JavaScript, Python or Java, the first surprise is not the syntax: it is that **there is no runtime to install**. You install a *compiler toolchain*, and what it produces is a self-contained native executable.
+If you come from JavaScript, Python or Java, the first surprise is not the syntax: it is that **there is no <Term id="runtime">runtime</Term> to install**. You install a *compiler <Term id="toolchain">toolchain</Term>*, and what it produces is a self-contained native executable.
 
 ## The toolchain in one command
 
-Rust is distributed through **rustup**, a toolchain multiplexer (think `nvm` or `pyenv`, but official). A default install gives you:
+Rust is distributed through **<Term id="rustup">rustup</Term>**, a toolchain multiplexer (think `nvm` or `pyenv`, but official). A default install gives you:
 
 | Tool | Role | Closest equivalent |
 | --- | --- | --- |
-| `rustc` | The compiler | `javac`, `tsc`, `gcc` |
-| `cargo` | Build system + package manager + test runner | `npm` + `webpack` + `jest`, `mvn`, `go` |
-| `std` | Standard library, precompiled for your target | JDK class library |
-| `clippy` | Linter with hundreds of idiom checks | ESLint, Pylint |
-| `rustfmt` | Formatter, one canonical style | Prettier, gofmt, Black |
-| `rust-analyzer` | Language server for your editor | tsserver, Pylance |
+| <Term id="rustc">`rustc`</Term> | The compiler | `javac`, `tsc`, `gcc` |
+| <Term id="cargo">`cargo`</Term> | Build system + package manager + test runner | `npm` + `webpack` + `jest`, `mvn`, `go` |
+| <Term id="std">`std`</Term> | Standard library, precompiled for your <Term id="target">target</Term> | JDK class library |
+| <Term id="clippy">`clippy`</Term> | Linter with hundreds of idiom checks | ESLint, Pylint |
+| <Term id="rustfmt">`rustfmt`</Term> | Formatter, one canonical style | Prettier, gofmt, Black |
+| <Term id="rust-analyzer">`rust-analyzer`</Term> | Language server for your editor | tsserver, Pylance |
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -27,7 +27,7 @@ rustup target add wasm32-unknown-unknown   # cross-compile targets
 ```
 
 <Callout type="note" title="Release channels and editions">
-A new **stable** version ships every six weeks, with a strong backwards-compatibility promise. Breaking *syntax* changes are batched into **editions** (2015, 2018, 2021, 2024), chosen per crate in `Cargo.toml`. Crates on different editions link together without problems, so the ecosystem never splits like Python 2 → 3.
+A new **<Term id="release-channel">stable</Term>** version ships every six weeks, with a strong backwards-compatibility promise. Breaking *syntax* changes are batched into **<Term id="edition">editions</Term>** (2015, 2018, 2021, 2024), chosen per <Term id="crate">crate</Term> in <Term id="cargo-toml">`Cargo.toml`</Term>. Crates on different editions link together without problems, so the ecosystem never splits like Python 2 → 3.
 </Callout>
 
 ## Cargo: one tool for the whole workflow
@@ -44,7 +44,7 @@ cargo build --release  # optimized build in target/release/
 cargo add serde        # add a dependency from crates.io
 ```
 
-The manifest is TOML, and the lock file (`Cargo.lock`) pins exact versions, just like `package-lock.json`:
+The manifest is TOML, and the lock file (<Term id="cargo-lock">`Cargo.lock`</Term>) pins exact versions, just like `package-lock.json`:
 
 ```toml
 [package]
@@ -60,24 +60,80 @@ serde = { version = "1", features = ["derive"] }
 Dependencies are compiled **from source** into your binary, there is no shared runtime library folder like `node_modules` at execution time, nor a classpath. The output in `target/release/hello` runs on a machine that has never seen Rust.
 </Callout>
 
+## Your first project
+
+Time to create a real project and look at what Cargo generates. Run this in any directory:
+
+```sh
+cargo new hello
+cd hello
+```
+
+`cargo new` creates a *binary* package, a program with a `main` function (`cargo new --lib` creates a library instead). This is everything it writes:
+
+```text
+hello/
+├── .git/          # a new git repository (skipped if you are already inside one)
+├── .gitignore     # a single line: /target
+├── Cargo.toml     # the manifest: name, version, edition, dependencies
+└── src/
+    └── main.rs    # the crate root: fn main() is the entry point
+```
+
+`src/main.rs` already contains a working program:
+
+```rust
+fn main() {
+    println!("Hello, world!");
+}
+```
+
+Build and run it with `cargo run`. The first three lines are Cargo's progress messages, printed on stderr; the last one is the output of your program:
+
+```sh
+$ cargo run
+   Compiling hello v0.1.0 (/home/you/hello)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running `target/debug/hello`
+Hello, world!
+```
+
+The first build adds two entries to the folder:
+
+```text
+hello/
+├── Cargo.lock      # exact version of every dependency, written by the first build
+├── Cargo.toml
+├── src/
+│   └── main.rs
+└── target/         # all build output: ignored by git, safe to delete
+    ├── debug/
+    │   └── hello   # the executable built by cargo build / cargo run
+    └── release/    # appears after cargo build --release
+```
+
+Commit `Cargo.lock` for programs, so that every build uses the same dependency versions. Never commit `target/`: `cargo clean` deletes it and the next build recreates it.
+
+There is nothing to configure, because Cargo finds files by convention: `src/main.rs` is the root of a binary, `src/lib.rs` the root of a library, and the `tests/`, `examples/` and `benches/` folders and every file in `src/bin/` are picked up automatically as soon as they exist. How larger projects are organized is covered in the intermediate track.
+
 ## From source to machine code
 
-The unit of compilation is the **crate**, not the file. `rustc` takes the root file (`main.rs` or `lib.rs`), follows the `mod` declarations and compiles the whole tree at once. Step through the pipeline to see where each Rust feature lives:
+The unit of compilation is the **crate**, not the file. `rustc` takes the root file (`main.rs` or `lib.rs`), follows the <Term id="module">`mod`</Term> declarations and compiles the whole tree at once. Step through the pipeline to see where each Rust feature lives:
 
 <CompilePipeline />
 
 Two consequences matter in daily work:
 
-1. **The borrow checker runs on MIR**, after type checking. That is why ownership errors appear only once your code already type-checks: fix type errors first, then lifetimes.
-2. **Generics are monomorphized** before LLVM: `Vec<i32>` and `Vec<String>` become two independent pieces of machine code. Abstractions are free at runtime, but compile times grow with how many concrete types you instantiate.
+1. **The <Term id="borrow-checker">borrow checker</Term> runs on <Term id="mir">MIR</Term>**, after <Term id="type-checking">type checking</Term>. That is why <Term id="ownership">ownership</Term> errors appear only once your code already type-checks: fix type errors first, then <Term id="lifetime">lifetimes</Term>.
+2. **<Term id="generics">Generics</Term> are <Term id="monomorphization">monomorphized</Term>** before <Term id="llvm">LLVM</Term>: <Term id="vec">`Vec<i32>`</Term> and `Vec<String>` become two independent pieces of machine code. <Term id="zero-cost">Abstractions are free</Term> at runtime, but compile times grow with how many concrete types you instantiate.
 
 <Callout type="runtime">
-"Rust has no runtime" is almost true. A Rust binary contains a tiny startup routine (set up the stack guard, collect `args`, call `main`), the memory allocator from the C library or one of your choice, and the **panic** machinery that unwinds the stack on fatal bugs. There is no garbage collector, no scheduler, no JIT and no reflection metadata.
+"Rust has no runtime" is almost true. A Rust binary contains a tiny startup routine (set up the <Term id="stack">stack</Term> guard, collect `args`, call `main`), the memory allocator from the C library or one of your choice, and the **<Term id="panic">panic</Term>** machinery that <Term id="unwinding">unwinds</Term> the stack on fatal bugs. There is no <Term id="garbage-collector">garbage collector</Term>, no scheduler, no <Term id="jit">JIT</Term> and no reflection metadata.
 </Callout>
 
 ## Hello, Rust
 
-Every executable starts at `fn main()`. `println!` ends with an exclamation mark because it is a **macro**: it checks the format string against the arguments *at compile time*.
+Every executable starts at `fn main()`. `println!` ends with an exclamation mark because it is a **<Term id="macro">macro</Term>**: it checks the format string against the arguments *at compile time*.
 
 <Playground title="hello.rs">
 ```rust
@@ -112,7 +168,32 @@ println!("{} primes: {:?}", primes.len(), primes);
 ```
 </Compare>
 
-`{}` uses the `Display` trait (user-facing output), `{:?}` uses `Debug` (developer output). Arrays implement `Debug` but not `Display`, so `{}` would not compile for `primes`: formatting is type-checked too.
+`{}` uses the <Term id="display-trait">`Display`</Term> trait (user-facing output), `{:?}` uses <Term id="debug-trait">`Debug`</Term> (developer output). <Term id="array">Arrays</Term> implement `Debug` but not `Display`, so `{}` would not compile for `primes`: formatting is type-checked too.
+
+### Running it on your machine
+
+The playground compiles your code on a remote server. To run the same program locally, replace the contents of `src/main.rs` in the `hello` project with the code above, then:
+
+```sh
+$ cargo run
+   Compiling hello v0.1.0 (/home/you/hello)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running `target/debug/hello`
+Hello from Rust, stable since 2015!
+4 primes: [2, 3, 5, 7]
+   3.142|left  |0xff
+```
+
+Cargo recompiles only when a source file has changed. `cargo run --release` builds an optimized version in `target/release/` and runs that one instead. Once built, the executable can also be started directly: `./target/debug/hello` (`target\debug\hello.exe` on Windows).
+
+For a quick experiment with a single file and no dependencies you can skip Cargo and call the compiler yourself. Pass the edition explicitly, because a bare `rustc` defaults to 2015:
+
+```sh
+rustc --edition 2024 hello.rs   # writes the executable ./hello next to the source
+./hello
+```
+
+As soon as you need a crate from <Term id="crates-io">crates.io</Term>, or a second file, go back to a Cargo project.
 
 ## Debug vs release
 
@@ -127,11 +208,12 @@ fn main() {
 ```
 </Playground>
 
-In a **debug** build this panics with *attempt to add with overflow*. In **release** mode the check is removed and the value wraps to `0`. If you need a specific behaviour regardless of the profile, say so explicitly with `wrapping_add`, `checked_add` or `saturating_add`, which you will meet in the next lesson.
+In a **<Term id="profile">debug</Term>** build this panics with *attempt to add with <Term id="overflow">overflow</Term>*. In **release** mode the check is removed and the value wraps to `0`. If you need a specific behaviour regardless of the profile, say so explicitly with `wrapping_add`, `checked_add` or `saturating_add`, which you will meet in the next lesson.
 
 ## Key takeaways
 
 - `rustup` manages toolchains, `cargo` drives everything else: build, test, dependencies, docs.
+- `cargo new` scaffolds `Cargo.toml` and `src/main.rs`; `cargo run` builds into `target/debug/` and runs the result.
 - The crate is the compilation unit; the output is a native, self-contained binary.
 - Borrow checking happens late in the pipeline, on MIR; generics are monomorphized before code generation.
 - Macros like `println!` are expanded at compile time, so even format strings are type-checked.

@@ -5,15 +5,15 @@ duration: 25
 tags: [Vec, slices, String, "&str", UTF-8, HashMap]
 ---
 
-Three types cover most everyday data in Rust: `Vec<T>`, `String` and `HashMap<K, V>`. None of them is special: they are ordinary library structs that own a heap buffer, so everything you learned about ownership and borrowing applies to them unchanged. What changes is how much of their memory behaviour you can now *see*.
+Three types cover most everyday data in Rust: <Term id="vec">`Vec<T>`</Term>, <Term id="string">`String`</Term> and <Term id="hashmap">`HashMap<K, V>`</Term>. None of them is special: they are ordinary library <Term id="struct">structs</Term> that own a <Term id="heap">heap</Term> buffer, so everything you learned about <Term id="ownership">ownership</Term> and <Term id="borrow">borrowing</Term> applies to them unchanged. What changes is how much of their memory behaviour you can now *see*.
 
 ## Vec: a growable array
 
-A `Vec<T>` is three words on the stack: a **pointer** to a heap buffer, the **length** (how many elements are initialized) and the **capacity** (how many fit before the buffer must grow). When `len` reaches `capacity`, `push` allocates a bigger buffer, moves the elements, and frees the old one. Try it:
+A `Vec<T>` is three words on the <Term id="stack">stack</Term>: a **pointer** to a heap buffer, the **length** (how many elements are initialized) and the **<Term id="capacity">capacity</Term>** (how many fit before the buffer must grow). When `len` reaches `capacity`, `push` allocates a bigger buffer, moves the elements, and frees the old one. Try it:
 
 <VecGrowth />
 
-Doubling the capacity makes `push` *amortized* O(1): the total cost of all the copies stays proportional to the number of elements. If you know the final size, `Vec::with_capacity(n)` avoids reallocations altogether.
+Doubling the capacity makes `push` *<Term id="amortized">amortized</Term>* O(1): the total cost of all the copies stays proportional to the number of elements. If you know the final size, `Vec::with_capacity(n)` avoids <Term id="reallocation">reallocations</Term> altogether.
 
 <Playground title="Vec, capacity and slices">
 ```rust
@@ -45,10 +45,10 @@ fn main() {
 
 ### Slices: borrowed views
 
-`&[T]` is a **slice**: a pointer plus a length, borrowing a contiguous run of `T` that someone else owns. `&v[1..4]` borrows part of a vector, `&v` borrows all of it, and arrays coerce the same way. A function that only reads a sequence should take `&[T]`, not `&Vec<T>`: it then accepts vectors, arrays and sub-ranges alike, at no cost.
+`&[T]` is a **<Term id="slice">slice</Term>**: a pointer plus a length, borrowing a contiguous run of `T` that someone else owns. `&v[1..4]` borrows part of a vector, `&v` borrows all of it, and <Term id="array">arrays</Term> coerce the same way. A function that only reads a sequence should take `&[T]`, not `&Vec<T>`: it then accepts vectors, arrays and sub-ranges alike, at no cost.
 
 <Callout type="runtime" title="Why a push can invalidate references">
-A reallocation *moves* the elements to a new address. Any reference into the old buffer would now point to freed memory, which in C++ is the classic iterator-invalidation bug. In Rust, holding a `&` into a `Vec` borrows the whole `Vec`, and `push` needs `&mut self`, so the two cannot overlap. The compiler rejects the bug before it exists:
+A reallocation *moves* the elements to a new address. Any <Term id="reference">reference</Term> into the old buffer would now point to freed memory, which in C++ is the classic <Term id="iterator-invalidation">iterator-invalidation</Term> bug. In Rust, holding a <Term id="shared-reference">`&`</Term> into a `Vec` borrows the whole `Vec`, and `push` needs <Term id="mutable-reference">`&mut self`</Term>, so the two cannot overlap. The compiler rejects the bug before it exists:
 </Callout>
 
 <Playground title="Modifying a Vec while iterating over it" expectError>
@@ -66,7 +66,7 @@ fn main() {
 </Playground>
 
 <Callout type="compare" from="Java / C++">
-Java detects this at runtime with a `ConcurrentModificationException`, when the loop happens to run. C++ does not detect it at all: it is undefined behaviour. Rust reports it at compile time as an ordinary borrow error (E0502). The fix is to collect changes first and apply them after the loop, or use methods such as `retain`, `extend` or `iter().position()`.
+Java detects this at runtime with a `ConcurrentModificationException`, when the loop happens to run. C++ does not detect it at all: it is <Term id="ub">undefined behaviour</Term>. Rust reports it at compile time as an ordinary borrow error (E0502). The fix is to collect changes first and apply them after the loop, or use <Term id="method">methods</Term> such as `retain`, `extend` or `iter().position()`.
 </Callout>
 
 ## String and &str
@@ -75,12 +75,12 @@ Rust has two main string types, and the split mirrors `Vec<T>` and `&[T]`:
 
 | Type | What it is | Owns its data | Typical use |
 | --- | --- | --- | --- |
-| `String` | A `Vec<u8>` guaranteed to hold valid UTF-8 | Yes | Building and storing text |
-| `&str` | A slice of UTF-8 bytes (pointer + length) | No | Reading text, function parameters |
-| `&'static str` | A `&str` pointing into the binary itself | No | String literals like `"hello"` |
-| `char` | One Unicode scalar value, always 4 bytes | — | Single characters |
+| `String` | A `Vec<u8>` guaranteed to hold valid <Term id="utf-8">UTF-8</Term> | Yes | Building and storing text |
+| <Term id="str">`&str`</Term> | A slice of UTF-8 bytes (pointer + length) | No | Reading text, function parameters |
+| <Term id="static-lifetime">`&'static str`</Term> | A `&str` pointing into the binary itself | No | <Term id="string-literal">String literals</Term> like `"hello"` |
+| <Term id="char">`char`</Term> | One <Term id="unicode-scalar-value">Unicode scalar value</Term>, always 4 bytes | — | Single characters |
 
-As with slices, prefer `&str` for parameters: a `&String` coerces to `&str` automatically, and so does a literal.
+As with slices, prefer `&str` for parameters: a `&String` <Term id="deref-coercion">coerces</Term> to `&str` automatically, and so does a literal.
 
 <Playground title="String, &str and UTF-8">
 ```rust
@@ -122,20 +122,20 @@ let s = String::from("hey");
 let c = s[0]; // error[E0277]: the type `str` cannot be indexed by `{integer}`
 ```
 
-The reason is that strings are UTF-8, a variable-width encoding: `è` is 2 bytes, `🦀` is 4. "The character at index 5" cannot be found in O(1), and "character" is ambiguous anyway: byte, Unicode scalar value, or user-perceived grapheme (an emoji with a skin-tone modifier is several scalar values)? Rust makes you say which one you mean:
+The reason is that strings are UTF-8, a variable-width encoding: `è` is 2 bytes, `🦀` is 4. "The character at index 5" cannot be found in O(1), and "character" is ambiguous anyway: byte, Unicode scalar value, or user-perceived <Term id="grapheme">grapheme</Term> (an emoji with a skin-tone modifier is several scalar values)? Rust makes you say which one you mean:
 
 - `s.as_bytes()[i]` for bytes, O(1).
 - `s.chars().nth(i)` for Unicode scalar values, O(n).
-- `&s[a..b]` for a substring by **byte** range, which panics if `a` or `b` falls in the middle of a character.
-- Graphemes need a crate such as `unicode-segmentation`.
+- `&s[a..b]` for a substring by **byte** range, which <Term id="panic">panics</Term> if `a` or `b` falls in the middle of a character.
+- Graphemes need a <Term id="crate">crate</Term> such as `unicode-segmentation`.
 
 <Callout type="compare" from="JavaScript / Python / Java">
-JavaScript and Java strings are UTF-16 internally, so `"🦀".length` is 2 and indexing can split a character in half. Python 3 picks a fixed-width representation per string (1, 2 or 4 bytes per code point) to make indexing O(1), at the cost of memory and conversions. Rust stores UTF-8 everywhere, the same encoding as files and the network, and moves the cost to the rare places where you really need positional access.
+JavaScript and Java strings are <Term id="utf-16">UTF-16</Term> internally, so `"🦀".length` is 2 and indexing can split a character in half. Python 3 picks a fixed-width representation per string (1, 2 or 4 bytes per code point) to make indexing O(1), at the cost of memory and conversions. Rust stores UTF-8 everywhere, the same encoding as files and the network, and moves the cost to the rare places where you really need positional access.
 </Callout>
 
 ## HashMap and the entry API
 
-`HashMap<K, V>` lives in `std::collections` and works with any key type that implements `Eq` and `Hash` (derivable for your own types). Lookups return `Option<&V>` instead of `null` or a `KeyError`. The **entry API** handles the "insert if missing, then update" pattern with a single hash lookup, and without the double-borrow problem you would hit doing `get` followed by `insert`.
+`HashMap<K, V>` lives in `std::collections` and works with any key type that implements `Eq` and `Hash` (<Term id="derive">derivable</Term> for your own types). Lookups return <Term id="option">`Option<&V>`</Term> instead of `null` or a `KeyError`. The **<Term id="entry-api">entry API</Term>** handles the "insert if missing, then update" pattern with a single hash lookup, and without the double-borrow problem you would hit doing `get` followed by `insert`.
 
 <Playground title="Counting words with entry">
 ```rust
@@ -168,17 +168,17 @@ fn main() {
 ```
 </Playground>
 
-Two defaults worth knowing: iteration order is **unspecified** (it changes between runs), and the default hasher, SipHash 1-3, is chosen to resist hash-flooding attacks rather than for raw speed. Use `BTreeMap` when you need sorted keys, and a faster hasher such as `ahash` or `rustc-hash` when keys are not attacker-controlled.
+Two defaults worth knowing: iteration order is **unspecified** (it changes between runs), and the default <Term id="hasher">hasher</Term>, SipHash 1-3, is chosen to resist <Term id="hash-flooding">hash-flooding</Term> attacks rather than for raw speed. Use <Term id="btreemap">`BTreeMap`</Term> when you need sorted keys, and a faster hasher such as `ahash` or `rustc-hash` when keys are not attacker-controlled.
 
 ## Three ways to iterate
 
-A `for` loop calls `IntoIterator` on what you give it, and the form you choose decides what each element is:
+A `for` loop calls <Term id="into-iterator">`IntoIterator`</Term> on what you give it, and the form you choose decides what each element is:
 
 | Loop | Element type | Effect on the collection |
 | --- | --- | --- |
 | `for x in &v` | `&T` | Borrowed, unchanged, usable afterwards |
 | `for x in &mut v` | `&mut T` | Borrowed exclusively, elements can be modified |
-| `for x in v` | `T` | Moved: the collection is consumed |
+| `for x in v` | `T` | <Term id="move">Moved</Term>: the collection is consumed |
 
 <Playground title="By reference, by mutable reference, by value">
 ```rust

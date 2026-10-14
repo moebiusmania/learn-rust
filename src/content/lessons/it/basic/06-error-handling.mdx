@@ -13,8 +13,8 @@ Rust divide i fallimenti in due categorie e assegna a ciascuna un meccanismo div
 
 | | Errore recuperabile | Bug / invariante violata |
 | --- | --- | --- |
-| Esempi | File non trovato, input utente non valido, timeout di rete | Indice fuori dai limiti, `unwrap()` su `None`, overflow di un intero in debug |
-| Meccanismo | `Result<T, E>` restituito come valore | `panic!`: srotola il thread e si ferma |
+| Esempi | File non trovato, input utente non valido, timeout di rete | Indice fuori dai limiti, <Term id="unwrap">`unwrap()`</Term> su `None`, <Term id="overflow">overflow di un intero</Term> in <Term id="profile">debug</Term> |
+| Meccanismo | <Term id="result">`Result<T, E>`</Term> restituito come valore | <Term id="panic">`panic!`</Term>: <Term id="unwinding">srotola</Term> il thread e si ferma |
 | Visibile nella firma | Sì | No |
 | Compito del chiamante | Gestirlo o propagarlo | Nessuno: va corretto il codice |
 
@@ -47,7 +47,7 @@ fn main() {
 Le prime quattro righe sono normale flusso di controllo. L'ultima è un crash con un messaggio chiaro, la posizione nel sorgente e il codice di uscita 101. `unwrap()` ed `expect("perché non può fallire")` trasformano un `None` o un `Err` in un panic: vanno bene nei test, nei prototipi e quando un'invariante garantisce davvero il successo; altrove sono un campanello d'allarme.
 
 <Callout type="runtime" title="Cosa fa davvero un panic">
-Di default un panic **srotola** (unwind) lo stack del thread corrente: ogni valore ancora vivo viene rilasciato in ordine inverso, quindi i file vengono chiusi e i lock rilasciati, poi il thread termina. Se è il thread principale, il processo esce con codice 101. Il panic di un altro thread si può osservare tramite `JoinHandle::join`. Con `panic = "abort"` nel profilo Cargo il processo invece termina subito, il che rende i binari più piccoli ed è comune nel codice embedded. I panic non sono eccezioni: `catch_unwind` esiste per i confini FFI e i thread pool, non per il flusso di controllo.
+Di default un panic **srotola** (unwind) lo <Term id="stack">stack</Term> del thread corrente: ogni valore ancora vivo viene <Term id="drop">rilasciato</Term> in ordine inverso, quindi i file vengono chiusi e i lock rilasciati, poi il thread termina. Se è il thread principale, il processo esce con codice 101. Il panic di un altro thread si può osservare tramite `JoinHandle::join`. Con `panic = "abort"` nel profilo <Term id="cargo">Cargo</Term> il processo invece termina subito, il che rende i binari più piccoli ed è comune nel codice embedded. I panic non sono eccezioni: `catch_unwind` esiste per i confini <Term id="ffi">FFI</Term> e i thread pool, non per il flusso di controllo.
 </Callout>
 
 ## Result e Option sono normali enum
@@ -61,14 +61,14 @@ enum Result<T, E> {
 }
 ```
 
-Essendo semplici valori puoi memorizzarli, metterli in un `Vec` e trasformarli con dei metodi invece di annidare `match` ovunque. I combinatori più utili:
+Essendo semplici valori puoi memorizzarli, metterli in un <Term id="vec">`Vec`</Term> e trasformarli con dei <Term id="method">metodi</Term> invece di annidare <Term id="match">`match`</Term> ovunque. I <Term id="combinator">combinatori</Term> più utili:
 
 | Metodo | Su | Cosa fa |
 | --- | --- | --- |
 | `map(f)` | entrambi | Trasforma il valore di successo, conserva il fallimento |
 | `and_then(f)` | entrambi | Concatena un altro passo che può fallire (`flatMap`) |
 | `unwrap_or(v)` / `unwrap_or_default()` | entrambi | Ripiega su un valore |
-| `ok_or(err)` | `Option` | Trasforma `None` in uno specifico `Err` |
+| `ok_or(err)` | <Term id="option">`Option`</Term> | Trasforma `None` in uno specifico `Err` |
 | `ok()` | `Result` | Scarta l'errore, tiene un `Option` |
 | `map_err(f)` | `Result` | Trasforma o arricchisce l'errore |
 
@@ -97,14 +97,14 @@ fn main() {
 
 ## L'operatore ?
 
-Il più delle volte una funzione non può gestire un errore da sola e vuole passarlo al chiamante. È quello che fa `?`: applicato a un `Result`, estrae il valore `Ok` oppure **ritorna subito** dalla funzione che lo contiene con l'`Err`. Scegli quale chiamata fallisce ed esegui passo passo:
+Il più delle volte una funzione non può gestire un errore da sola e vuole passarlo al chiamante. È quello che fa <Term id="question-mark">`?`</Term>: applicato a un `Result`, estrae il valore `Ok` oppure **ritorna subito** dalla funzione che lo contiene con l'`Err`. Scegli quale chiamata fallisce ed esegui passo passo:
 
 <QuestionMarkFlow />
 
 Due dettagli nascosti in quell'espansione sono importanti:
 
 1. `?` si può usare solo dentro una funzione che a sua volta restituisce `Result` (oppure `Option`, per i valori `Option`). La propagazione è visibile in ogni firma lungo il percorso.
-2. L'errore passa per `From::from` prima di essere restituito. È così che un `ParseIntError` di basso livello diventa il tipo di errore della tua applicazione senza alcuna conversione esplicita nel punto di chiamata.
+2. L'errore passa per <Term id="from-into">`From::from`</Term> prima di essere restituito. È così che un `ParseIntError` di basso livello diventa il tipo di errore della tua applicazione senza alcuna conversione esplicita nel punto di chiamata.
 
 <Compare left="Go">
 ```go
@@ -135,7 +135,7 @@ La semantica è la stessa dei controlli espliciti di Go, con una differenza che 
 
 ## Progettare i tipi di errore
 
-Per una libreria, l'errore idiomatico è un **enum** con una variante per ogni modalità di fallimento, che implementa `Display` (il messaggio leggibile), `std::error::Error` (l'interfaccia comune) e `From` per ciascun errore sottostante che vuoi far convertire automaticamente a `?`.
+Per una libreria, l'errore idiomatico è un **<Term id="enum">enum</Term>** con una <Term id="variant">variante</Term> per ogni modalità di fallimento, che implementa <Term id="display-trait">`Display`</Term> (il messaggio leggibile), <Term id="error-trait">`std::error::Error`</Term> (l'interfaccia comune) e `From` per ciascun errore sottostante che vuoi far convertire automaticamente a `?`.
 
 <Playground title="Un enum di errori personalizzato con conversioni From">
 ```rust
@@ -188,7 +188,7 @@ fn main() {
 ```
 </Playground>
 
-I chiamanti possono fare `match` su `ConfigError` per reagire in modo diverso a una chiave mancante e a un numero non valido. Togli l'implementazione di `From` e il `?` su `value.parse()` smette di compilare, perché il compilatore non sa più come trasformare un tipo di errore nell'altro. Succede la stessa cosa qui, dove l'errore di destinazione è una semplice `String`:
+I chiamanti possono fare `match` su `ConfigError` per reagire in modo diverso a una chiave mancante e a un numero non valido. Togli l'implementazione di `From` e il `?` su `value.parse()` smette di compilare, perché il compilatore non sa più come trasformare un tipo di errore nell'altro. Succede la stessa cosa qui, dove l'errore di destinazione è una semplice <Term id="string">`String`</Term>:
 
 <Playground title="? richiede una conversione From" expectError>
 ```rust
@@ -205,7 +205,7 @@ fn main() {
 
 ### `Box<dyn Error>` per le applicazioni
 
-Nel codice applicativo spesso vuoi solo far risalire qualsiasi errore e stamparlo. `Box<dyn Error>` è un tipo "errore qualsiasi" allocato sullo heap: ogni tipo che implementa `Error` vi si converte tramite `?`, e lo stesso vale per un messaggio `&str`. Anche `main` può restituire un `Result`; se restituisce `Err`, Rust stampa la forma `Debug` dell'errore ed esce con codice 1.
+Nel codice applicativo spesso vuoi solo far risalire qualsiasi errore e stamparlo. <Term id="box-dyn-error">`Box<dyn Error>`</Term> è un tipo "errore qualsiasi" allocato sullo <Term id="heap">heap</Term>: ogni tipo che implementa `Error` vi si converte tramite `?`, e lo stesso vale per un messaggio <Term id="str">`&str`</Term>. Anche `main` può restituire un `Result`; se restituisce `Err`, Rust stampa la forma <Term id="debug-trait">`Debug`</Term> dell'errore ed esce con codice 1.
 
 <Playground title="Box<dyn Error> e main che restituisce Result">
 ```rust
@@ -234,7 +234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 </Playground>
 
 <Callout type="tip" title="thiserror e anyhow">
-Due crate coprono quasi tutte le esigenze reali. **thiserror** genera il codice ripetitivo di `Display`, `Error` e `From` per un enum di errori di una libreria a partire da attributi come `#[error("missing key {0}")]` e `#[from]`. **anyhow** offre `anyhow::Result<T>`, un `Box<dyn Error>` migliore che permette di aggiungere contesto: `read(path).with_context(|| format!("reading {path}"))?`. La regola pratica: thiserror per le librerie, i cui chiamanti devono fare match sugli errori; anyhow per le applicazioni, che per lo più devono solo segnalarli.
+Due <Term id="crate">crate</Term> coprono quasi tutte le esigenze reali. **<Term id="thiserror">thiserror</Term>** genera il codice ripetitivo di `Display`, `Error` e `From` per un enum di errori di una libreria a partire da <Term id="attribute">attributi</Term> come `#[error("missing key {0}")]` e `#[from]`. **<Term id="anyhow">anyhow</Term>** offre `anyhow::Result<T>`, un `Box<dyn Error>` migliore che permette di aggiungere contesto: `read(path).with_context(|| format!("reading {path}"))?`. La regola pratica: thiserror per le librerie, i cui chiamanti devono fare match sugli errori; anyhow per le applicazioni, che per lo più devono solo segnalarli.
 </Callout>
 
 <Callout type="compare" from="Java / Python">

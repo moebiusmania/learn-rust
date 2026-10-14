@@ -48,6 +48,17 @@
     "lessonNumber": "Lezione {n}",
     "minutes": "{count} min"
   },
+  "glossary": {
+    "title": "Glossario",
+    "open": "Apri il glossario",
+    "count": "{count} termini",
+    "filter": "Filtra i termini…",
+    "letters": "Vai alla lettera",
+    "noMatch": "Nessun termine corrisponde al filtro.",
+    "aka": "anche",
+    "see": "Vedi anche",
+    "usedIn": "Usato in"
+  },
   "lesson": {
     "minutes": "{count} min di lettura",
     "lessonOf": "Lezione {n} di {total}",

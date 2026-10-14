@@ -5,11 +5,11 @@ duration: 25
 tags: [riferimenti, "&mut", borrow checker, NLL, slice]
 ---
 
-Spostare l'ownership dentro e fuori da ogni funzione sarebbe insopportabile. La maggior parte del codice deve solo *guardare* un valore, o modificarlo per un attimo, e poi restituirlo. A questo servono i **riferimenti**: prendi in **prestito** (borrow) un valore, e il proprietario se lo tiene. Il componente del compilatore che controlla i prestiti, il *borrow checker*, impone una sola regola, semplice, che però elimina in un colpo data race, invalidazione degli iteratori e puntatori pendenti.
+<Term id="move">Spostare</Term> l'<Term id="ownership">ownership</Term> dentro e fuori da ogni funzione sarebbe insopportabile. La maggior parte del codice deve solo *guardare* un valore, o modificarlo per un attimo, e poi restituirlo. A questo servono i **<Term id="reference">riferimenti</Term>**: prendi in **<Term id="borrow">prestito</Term>** (borrow) un valore, e il proprietario se lo tiene. Il componente del compilatore che controlla i prestiti, il *<Term id="borrow-checker">borrow checker</Term>*, impone <Term id="aliasing-xor-mutability">una sola regola, semplice</Term>, che però elimina in un colpo <Term id="data-race">data race</Term>, <Term id="iterator-invalidation">invalidazione degli iteratori</Term> e <Term id="dangling-reference">puntatori pendenti</Term>.
 
 ## Riferimenti condivisi: `&T`
 
-`&value` crea un riferimento condiviso. La funzione riceve un puntatore, il chiamante mantiene l'ownership, e niente viene copiato o liberato.
+`&value` crea un <Term id="shared-reference">riferimento condiviso</Term>. La funzione riceve un puntatore, il chiamante mantiene l'ownership, e niente viene copiato o liberato.
 
 ```rust
 fn count_words(text: &str) -> usize {
@@ -25,7 +25,7 @@ Attraverso un `&T` puoi leggere ma non modificare. Puoi creare quanti riferiment
 
 ## Riferimenti mutabili: `&mut T`
 
-Per modificare un valore preso in prestito ti serve un riferimento esclusivo, `&mut T`. Sia il binding sia il prestito devono essere esplicitamente mutabili, e nel punto di chiamata si scrive `&mut`: la mutazione è visibile dove avviene, non solo nella firma della funzione.
+Per modificare un valore preso in prestito ti serve un riferimento esclusivo, <Term id="mutable-reference">`&mut T`</Term>. Sia il <Term id="binding">binding</Term> sia il prestito devono essere esplicitamente <Term id="mut">mutabili</Term>, e nel punto di chiamata si scrive `&mut`: la mutazione è visibile dove avviene, non solo nella firma della funzione.
 
 <Playground title="Leggere e scrivere tramite riferimenti">
 ```rust
@@ -50,7 +50,7 @@ fn main() {
 ```
 </Playground>
 
-Nota che `total` accetta `&[i32]`, una slice, mentre noi passiamo `&data`, un `&Vec<i32>`. Il compilatore converte da solo (*deref coercion*), quindi le funzioni che leggono soltanto dovrebbero accettare slice e `&str` anziché `&Vec<T>` e `&String`: così funzionano con array, vettori e loro porzioni.
+Nota che `total` accetta `&[i32]`, una <Term id="slice">slice</Term>, mentre noi passiamo `&data`, un <Term id="vec">`&Vec<i32>`</Term>. Il compilatore converte da solo (*<Term id="deref-coercion">deref coercion</Term>*), quindi le funzioni che leggono soltanto dovrebbero accettare slice e <Term id="str">`&str`</Term> anziché `&Vec<T>` e <Term id="string">`&String`</Term>: così funzionano con <Term id="array">array</Term>, vettori e loro porzioni.
 
 ## La regola: aliasing XOR mutabilità
 
@@ -65,7 +65,7 @@ Esplora i quattro scenari qui sotto. Ogni barra è un borrow, vivo da dove viene
 
 <BorrowTimeline />
 
-Perché questa regola vale la fatica? Perché quasi tutti i bug di memoria legati all'aliasing sono casi in cui *qualcuno modifica dei dati mentre qualcun altro tiene un puntatore al loro interno*. Lo scenario 2 è l'esempio classico:
+Perché questa regola vale la fatica? Perché quasi tutti i bug di memoria legati all'<Term id="aliasing">aliasing</Term> sono casi in cui *qualcuno modifica dei dati mentre qualcun altro tiene un puntatore al loro interno*. Lo scenario 2 è l'esempio classico:
 
 <Playground title="Leggere mentre si scrive" expectError>
 ```rust
@@ -78,15 +78,15 @@ fn main() {
 ```
 </Playground>
 
-`push` può aver bisogno di più capacità: in quel caso alloca un buffer più grande, copia gli elementi e libera quello vecchio. `first` punterebbe allora a memoria liberata. In C++ il codice equivalente con `std::vector` compila ed è comportamento indefinito. Rust segnala `cannot borrow v as mutable because it is also borrowed as immutable`. Sposta il `println!` sopra il `push` e compila.
+`push` può aver bisogno di più <Term id="capacity">capacità</Term>: in quel caso alloca un buffer più grande, copia gli elementi e libera quello vecchio. `first` punterebbe allora a memoria liberata. In C++ il codice equivalente con `std::vector` compila ed è <Term id="ub">comportamento indefinito</Term>. Rust segnala `cannot borrow v as mutable because it is also borrowed as immutable`. Sposta il `println!` sopra il `push` e compila.
 
 <Callout type="runtime">
-I riferimenti sono normali puntatori macchina, senza contatori di riferimenti, lock o contabilità a runtime: il borrow checker gira in compilazione sulla MIR e poi sparisce. In più, la garanzia che un `&mut T` non abbia mai alias permette a rustc di dire a LLVM che il puntatore è `noalias`, sbloccando ottimizzazioni che i compilatori C possono applicare solo quando prometti `restrict`.
+I riferimenti sono normali puntatori macchina, senza contatori di riferimenti, lock o contabilità a runtime: il borrow checker gira in compilazione sulla <Term id="mir">MIR</Term> e poi sparisce. In più, la garanzia che un `&mut T` non abbia mai alias permette a <Term id="rustc">rustc</Term> di dire a <Term id="llvm">LLVM</Term> che il puntatore è <Term id="noalias">`noalias`</Term>, sbloccando ottimizzazioni che i compilatori C possono applicare solo quando prometti `restrict`.
 </Callout>
 
 ## Non-lexical lifetimes
 
-Un prestito dura fino al suo **ultimo utilizzo**, non fino alla fine del blocco che lo contiene. Si chiamano *non-lexical lifetimes* (NLL) e sono il comportamento di default da Rust 2018. Lo scenario 4 della linea temporale lo mostra: `r1` non viene più usato dopo la riga 3, quindi un nuovo prestito alla riga 4 va bene anche se `r1` è ancora sintatticamente nello scope.
+Un prestito dura fino al suo **ultimo utilizzo**, non fino alla fine del blocco che lo contiene. Si chiamano *<Term id="nll">non-lexical lifetimes</Term>* (NLL) e sono il comportamento di default da <Term id="edition">Rust 2018</Term>. Lo scenario 4 della linea temporale lo mostra: `r1` non viene più usato dopo la riga 3, quindi un nuovo prestito alla riga 4 va bene anche se `r1` è ancora sintatticamente nello <Term id="scope">scope</Term>.
 
 In pratica significa che spesso puoi risolvere un errore di borrowing *riordinando* il codice: finisci di usare il riferimento condiviso, poi modifica. Se trovi vecchi articoli con strani blocchi `{ }` aggiuntivi attorno ai prestiti, è un espediente pre-2018 che oggi serve di rado.
 
@@ -151,15 +151,15 @@ fn dangle() -> &String {
 //       but there is no value for it to be borrowed from
 ```
 
-Una funzione che crea un valore non può restituirne un riferimento: restituisci la `String` posseduta e lascia che sia il chiamante a possederla. Il meccanismo generale dietro questo controllo, i **lifetime**, è l'argomento di una lezione del percorso intermedio; per ora ricorda che un riferimento restituito deve puntare dentro uno degli input.
+Una funzione che crea un valore non può restituirne un riferimento: restituisci la `String` posseduta e lascia che sia il chiamante a possederla. Il meccanismo generale dietro questo controllo, i **<Term id="lifetime">lifetime</Term>**, è l'argomento di una lezione del percorso intermedio; per ora ricorda che un riferimento restituito deve puntare dentro uno degli input.
 
 <Callout type="compare" from="Go">
-L'escape analysis di Go sposta in silenzio `s` sullo heap in modo che `&s` resti valido, e il garbage collector la libererà più tardi. Rust non cambia mai alle tue spalle il posto in cui vive un valore: rifiuta il riferimento e ti chiede di decidere chi possiede i dati.
+L'<Term id="escape-analysis">escape analysis</Term> di Go sposta in silenzio `s` sullo <Term id="heap">heap</Term> in modo che `&s` resti valido, e il <Term id="garbage-collector">garbage collector</Term> la libererà più tardi. Rust non cambia mai alle tue spalle il posto in cui vive un valore: rifiuta il riferimento e ti chiede di decidere chi possiede i dati.
 </Callout>
 
 ## Slice: prendere in prestito una parte di una collezione
 
-Una **slice** è un riferimento a un intervallo contiguo di elementi: `&[T]` per array e vettori, `&str` per le stringhe. È un *fat pointer*: un indirizzo più una lunghezza, 16 byte sui target a 64 bit.
+Una **slice** è un riferimento a un intervallo contiguo di elementi: `&[T]` per array e vettori, `&str` per le stringhe. È un *<Term id="fat-pointer">fat pointer</Term>*: un indirizzo più una lunghezza, 16 byte sui <Term id="target">target</Term> a 64 bit.
 
 <Playground title="Anche le slice sono prestiti">
 ```rust
@@ -185,7 +185,7 @@ fn main() {
 ```
 </Playground>
 
-Poiché `word` prende in prestito da `sentence`, chiamare `sentence.clear()` *mentre `word` è ancora in uso* verrebbe rifiutato: una slice non può mai vedere la sua sorgente troncata sotto i piedi. Prova a spostare il primo `println!` sotto `clear()` per vedere l'errore. Lo slicing delle stringhe lavora su offset in **byte** e va in panic se tagli a metà di un carattere UTF-8 multi-byte, quindi preferisci metodi come `find`, `split` e `char_indices` agli indici calcolati a mano.
+Poiché `word` prende in prestito da `sentence`, chiamare `sentence.clear()` *mentre `word` è ancora in uso* verrebbe rifiutato: una slice non può mai vedere la sua sorgente troncata sotto i piedi. Prova a spostare il primo `println!` sotto `clear()` per vedere l'errore. Lo slicing delle stringhe lavora su offset in **byte** e va in <Term id="panic">panic</Term> se tagli a metà di un carattere <Term id="utf-8">UTF-8</Term> multi-byte, quindi preferisci metodi come `find`, `split` e `char_indices` agli indici calcolati a mano.
 
 ## Punti chiave
 

@@ -5,11 +5,11 @@ duration: 20
 tags: [let, mut, shadowing, integers, overflow, expressions]
 ---
 
-Rust's variables and primitive types look like the ones you already know, but three defaults are flipped: bindings are **immutable** unless you say otherwise, numeric conversions are **never implicit**, and blocks, `if` and `match` are **expressions** that produce values. Each of these choices exists to make the code say exactly what it does.
+Rust's variables and primitive types look like the ones you already know, but three defaults are flipped: <Term id="binding">bindings</Term> are **immutable** unless you say otherwise, numeric conversions are **never implicit**, and blocks, `if` and <Term id="match">`match`</Term> are **<Term id="expression">expressions</Term>** that produce values. Each of these choices exists to make the code say exactly what it does.
 
 ## Bindings are immutable by default
 
-`let` introduces a *binding*: a name attached to a value. Without `mut`, the binding can never be reassigned.
+`let` introduces a *binding*: a name attached to a value. Without <Term id="mut">`mut`</Term>, the binding can never be reassigned.
 
 <Playground title="Immutable by default" expectError>
 ```rust
@@ -43,11 +43,11 @@ let user = User { name: "Ada".into() };
 ```
 </Compare>
 
-Note the last line. In Rust, mutability is a property of the **binding and everything reachable through it**: an immutable `user` means its fields cannot change either. There is no "shallow const". This deep, compiler-checked immutability is what later allows the borrow checker to reason about who may modify what.
+Note the last line. In Rust, mutability is a property of the **binding and everything reachable through it**: an immutable `user` means its fields cannot change either. There is no "shallow const". This deep, compiler-checked immutability is what later allows the <Term id="borrow-checker">borrow checker</Term> to reason about who may modify what.
 
 ### Shadowing
 
-You can declare a new binding with the same name. The old one is *shadowed*, not mutated, and the new one may even have a different type. It is the idiomatic way to refine a value through a few transformation steps without inventing `input2`, `inputTrimmed` and so on.
+You can declare a new binding with the same name. The old one is *<Term id="shadowing">shadowed</Term>*, not mutated, and the new one may even have a different type. It is the idiomatic way to refine a value through a few transformation steps without inventing `input2`, `inputTrimmed` and so on.
 
 <Playground title="Shadowing vs mutation">
 ```rust
@@ -76,7 +76,7 @@ const MAX_RETRIES: u32 = 5;            // inlined at every use, type required
 static GREETING: &str = "hello";        // one fixed address in the binary
 ```
 
-`const` is a compile-time value, copied wherever it is used; its initializer must be computable at compile time (`const fn` calls are allowed). `static` has a single memory location for the whole program run. A `static mut` exists but every access requires `unsafe`, because global mutable state is a data race waiting to happen; you will see safe alternatives (`AtomicU64`, `Mutex`, `OnceLock`) in the advanced track.
+<Term id="const">`const`</Term> is a compile-time value, copied wherever it is used; its initializer must be computable at compile time (<Term id="const-fn">`const fn`</Term> calls are allowed). <Term id="static">`static`</Term> has a single memory location for the whole program run. A `static mut` exists but every access requires <Term id="unsafe">`unsafe`</Term>, because global mutable state is a <Term id="data-race">data race</Term> waiting to happen; you will see safe alternatives (`AtomicU64`, `Mutex`, `OnceLock`) in the advanced track.
 
 ## A precise numeric tower
 
@@ -89,9 +89,9 @@ Rust has no "number" type and no implicit widening. Every integer type states it
 | 32 bit | `i32` | `u32` | default for integer literals |
 | 64 bit | `i64` | `u64` | |
 | 128 bit | `i128` | `u128` | |
-| pointer | `isize` | `usize` | indexes and lengths are `usize` |
+| pointer | <Term id="usize">`isize`</Term> | `usize` | indexes and lengths are `usize` |
 
-Floats are `f32` and `f64` (the default), `bool` is one byte, and `char` is a 4-byte **Unicode scalar value**, not a byte and not a UTF-16 unit. Strings are UTF-8, so `'é'.len_utf8()` is 2 while `size_of::<char>()` is 4.
+Floats are `f32` and `f64` (the default), `bool` is one byte, and <Term id="char">`char`</Term> is a 4-byte **<Term id="unicode-scalar-value">Unicode scalar value</Term>**, not a byte and not a <Term id="utf-16">UTF-16</Term> unit. Strings are <Term id="utf-8">UTF-8</Term>, so `'é'.len_utf8()` is 2 while `size_of::<char>()` is 4.
 
 Conversions are always visible in the code:
 
@@ -105,16 +105,16 @@ let ratio = 7 as f64 / 2.0;            // 3.5: you must convert first
 ```
 
 <Callout type="compare" from="C / Java">
-`int + long` in C or Java silently widens; `byte b = 300` in some languages silently truncates. In Rust, adding a `u8` to a `u32` is a type error. Prefer `into()` for conversions that cannot lose information and `try_from()` for those that can; reserve `as` for when you really want bit-level truncation or float/int casts.
+`int + long` in C or Java silently widens; `byte b = 300` in some languages silently truncates. In Rust, adding a `u8` to a `u32` is a type error. Prefer <Term id="from-into">`into()`</Term> for conversions that cannot lose information and `try_from()` for those that can; reserve <Term id="as-cast">`as`</Term> for when you really want bit-level truncation or float/int casts.
 </Callout>
 
 ## Overflow is a decision you make
 
-What should `250u8 + 10` be? C says "undefined" for signed types and "wrap" for unsigned ones; Java always wraps; Python grows the integer forever. Rust's answer is: **you choose, explicitly**, and the default `+` is treated as a bug if it overflows.
+What should `250u8 + 10` be? C says "undefined" for signed types and "wrap" for unsigned ones; Java always wraps; Python grows the integer forever. Rust's answer is: **you choose, explicitly**, and the default `+` is treated as a bug if it <Term id="overflow">overflows</Term>.
 
 <IntegerExplorer />
 
-Try `i8` with `a = 127, b = 1`: the bit pattern `0111_1111` plus one becomes `1000_0000`, which in two's complement reads as `-128`. Then try `u8` with `250 + 10`.
+Try `i8` with `a = 127, b = 1`: the bit pattern `0111_1111` plus one becomes `1000_0000`, which in <Term id="twos-complement">two's complement</Term> reads as `-128`. Then try `u8` with `250 + 10`.
 
 <Playground title="Four overflow strategies">
 ```rust
@@ -134,18 +134,18 @@ fn main() {
 </Playground>
 
 - `wrapping_*` for hashes, checksums and ring counters.
-- `checked_*` returns `Option` when overflow means invalid input.
+- `checked_*` returns <Term id="option">`Option`</Term> when overflow means invalid input.
 - `saturating_*` for things like volume, progress or retry counters that should clamp.
 - `overflowing_*` when you need both the wrapped value and the carry flag.
 - `std::num::Wrapping<T>` and `Saturating<T>` wrap a type so that plain `+` follows that policy.
 
 <Callout type="runtime">
-Plain arithmetic compiles to a single CPU instruction in release builds. In debug builds the compiler adds an overflow check after each operation and calls the panic handler if it triggers. The behaviour is controlled by the `overflow-checks` setting of the Cargo profile, so you can keep the checks in production with `[profile.release] overflow-checks = true` at a small cost.
+Plain arithmetic compiles to a single CPU instruction in <Term id="profile">release builds</Term>. In debug builds the compiler adds an overflow check after each operation and calls the <Term id="panic">panic handler</Term> if it triggers. The behaviour is controlled by the `overflow-checks` setting of the <Term id="cargo">Cargo</Term> profile, so you can keep the checks in production with `[profile.release] overflow-checks = true` at a small cost.
 </Callout>
 
 ## Tuples and arrays
 
-Both have a size fixed at compile time and live inline (on the stack, or inside whatever contains them), with no heap allocation.
+Both have a size fixed at compile time and live inline (on the <Term id="stack">stack</Term>, or inside whatever contains them), with no <Term id="heap">heap</Term> allocation.
 
 ```rust
 let point: (i32, f64, &str) = (3, 4.5, "origin");
@@ -157,11 +157,11 @@ let days = ["mon", "tue", "wed"];   // type [&str; 3]
 let day = days[i];                  // bounds-checked
 ```
 
-The length is part of the type: `[u8; 4]` and `[u8; 5]` are different types. Indexing is **always bounds-checked**: an out-of-range index panics instead of reading neighbouring memory. With a constant index the compiler even refuses to build. The empty tuple `()`, called *unit*, is the type of "no meaningful value", similar to `void`.
+The length is part of the type: <Term id="array">`[u8; 4]`</Term> and `[u8; 5]` are different types. Indexing is **always <Term id="bounds-checking">bounds-checked</Term>**: an out-of-range index panics instead of reading neighbouring memory. With a constant index the compiler even refuses to build. The empty <Term id="tuple">tuple</Term> `()`, called *<Term id="unit">unit</Term>*, is the type of "no meaningful value", similar to `void`.
 
 ## Type inference
 
-Inference is local to a function body but works in both directions: a later use can determine an earlier type.
+<Term id="type-inference">Inference</Term> is local to a function body but works in both directions: a later use can determine an earlier type.
 
 ```rust
 let mut ids = Vec::new();         // Vec<?> for now

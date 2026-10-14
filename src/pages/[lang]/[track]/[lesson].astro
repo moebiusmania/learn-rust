@@ -6,7 +6,7 @@ import Icon from '@/components/Icon.astro';
 import { useTranslations } from '@/i18n';
 import { locales, tracks, type Locale, type Track } from '@/i18n/config';
 import { localeUrl } from '@/lib/url';
-import { getLessons, getTrackInfo, type Lesson } from '@/lib/content';
+import { getGlossary, getLessons, getTrackInfo, type Lesson } from '@/lib/content';
 
 export async function getStaticPaths() {
   const paths = [];
@@ -26,6 +26,7 @@ const lang = Astro.params.lang as Locale;
 const track = Astro.params.track as Track;
 const { t } = useTranslations(lang);
 const info = await getTrackInfo(lang, track);
+const glossary = await getGlossary(lang, track);
 const { Content, headings } = await render(lesson.entry);
 const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
@@ -46,6 +47,9 @@ const { title, description, duration, tags } = lesson.entry.data;
             <li><a href={localeUrl(lang, track, l.slug)} aria-current={l === lesson ? 'page' : undefined}>{l.entry.data.title}</a></li>
           ))}
         </ol>
+        {glossary && (
+          <a class="side-glossary" href={localeUrl(lang, track, 'glossary')}><Icon name="book" size={14} />{t('glossary.title')}</a>
+        )}
       </nav>
     </aside>
 
@@ -127,4 +131,10 @@ const { title, description, duration, tags } = lesson.entry.data;
   .lesson-desc { margin-block: var(--space-3) var(--space-4); font-size: var(--step-1); color: var(--text-muted); line-height: 1.5; }
   .lesson-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); }
   .side-nav h2 a { color: inherit; text-decoration: none; }
+  .side-glossary {
+    display: flex; align-items: center; gap: var(--space-2); margin-block-start: var(--space-3);
+    padding: 0.45rem 0.6rem; border-radius: var(--radius-s); border-block-start: 1px solid var(--border);
+    color: var(--text-muted); text-decoration: none; font-size: var(--step--1);
+    &:hover { background: var(--surface-2); color: var(--accent-strong); }
+  }
 </style>

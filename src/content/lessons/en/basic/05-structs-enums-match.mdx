@@ -5,28 +5,28 @@ duration: 25
 tags: [struct, impl, enum, Option, match, patterns]
 ---
 
-Rust has no classes, no inheritance and no `null`. What it has instead is a clean split between **data** (`struct` and `enum`) and **behaviour** (`impl` blocks and traits), plus a pattern-matching engine that the compiler checks for completeness. Together they replace a surprising number of object-oriented design patterns.
+Rust has no classes, no inheritance and no `null`. What it has instead is a clean split between **data** (<Term id="struct">`struct`</Term> and <Term id="enum">`enum`</Term>) and **behaviour** (<Term id="impl-block">`impl` blocks</Term> and <Term id="trait">traits</Term>), plus a <Term id="pattern">pattern-matching</Term> engine that the compiler checks for completeness. Together they replace a surprising number of object-oriented design patterns.
 
 ## Structs: three shapes of data
 
 A `struct` is a plain aggregate of fields. It has no hidden header, no vtable pointer and no identity beyond its bytes: a struct of two `u32` occupies exactly 8 bytes.
 
 - **Named-field structs**, the common case: `struct User { name: String, age: u32 }`.
-- **Tuple structs** have positional fields: `struct Meters(f64);`. With a single field they are called *newtypes* and are a zero-cost way to stop mixing up meters and seconds.
-- **Unit structs** have no fields at all: `struct Marker;`. They take zero bytes and are useful as type-level markers.
+- **<Term id="tuple-struct">Tuple structs</Term>** have positional fields: `struct Meters(f64);`. With a single field they are called *<Term id="newtype">newtypes</Term>* and are a <Term id="zero-cost">zero-cost</Term> way to stop mixing up meters and seconds.
+- **<Term id="unit-struct">Unit structs</Term>** have no fields at all: `struct Marker;`. They take zero bytes and are useful as type-level markers.
 
 ## Methods live in impl blocks
 
-Behaviour is attached with one or more `impl` blocks, separate from the data definition. The first parameter of a method, the **receiver**, says what the method does with the value, and that is part of the API contract:
+Behaviour is attached with one or more `impl` blocks, separate from the data definition. The first parameter of a <Term id="method">method</Term>, the **<Term id="receiver">receiver</Term>**, says what the method does with the value, and that is part of the API contract:
 
 | Receiver | Meaning | Closest equivalent |
 | --- | --- | --- |
-| `&self` | Reads the value through a shared borrow | A `const` method in C++ |
-| `&mut self` | Mutates the value through an exclusive borrow | A regular method on a mutable object |
-| `self` | Consumes the value: the caller cannot use it afterwards | No common equivalent |
-| *(none)* | Associated function, called as `Type::name()` | A `static` method |
+| `&self` | Reads the value through a <Term id="shared-reference">shared borrow</Term> | A `const` method in C++ |
+| `&mut self` | Mutates the value through an <Term id="mutable-reference">exclusive borrow</Term> | A regular method on a mutable object |
+| `self` | <Term id="move">Consumes</Term> the value: the caller cannot use it afterwards | No common equivalent |
+| *(none)* | <Term id="associated-function">Associated function</Term>, called as `Type::name()` | A `static` method |
 
-There are no constructors. By convention an associated function called `new` (or something more descriptive) builds the value, and `Self` is an alias for the type being implemented.
+There are no constructors. By convention an associated function called `new` (or something more descriptive) builds the value, and <Term id="self-type">`Self`</Term> is an alias for the type being implemented.
 
 <Playground title="Structs and methods">
 ```rust
@@ -82,15 +82,15 @@ fn main() {
 ```
 </Playground>
 
-Uncomment the last `println!` of `r` to see the compiler reject a use after `into_tuple` consumed it. `#[derive(Debug, Clone, PartialEq)]` asks the compiler to generate the boilerplate implementations for printing, deep copying and comparing: nothing is implemented implicitly, not even equality.
+Uncomment the last <Term id="macro">`println!`</Term> of `r` to see the compiler reject a use after `into_tuple` consumed it. <Term id="derive">`#[derive(Debug, Clone, PartialEq)]`</Term> asks the compiler to generate the boilerplate implementations for printing, deep copying and comparing: nothing is implemented implicitly, not even equality.
 
 <Callout type="runtime">
-A method call is just a function call with nicer syntax: `r.area()` compiles to `Rectangle::area(&r)`, resolved statically. There is no dynamic dispatch unless you explicitly ask for it with trait objects (intermediate track). Unlike Java or C#, values have **no object header**: an array of a million `Rectangle`s is 8 MB of contiguous `u32` pairs, with no per-object allocation and no pointer chasing.
+A method call is just a function call with nicer syntax: `r.area()` compiles to `Rectangle::area(&r)`, resolved statically. There is no <Term id="dynamic-dispatch">dynamic dispatch</Term> unless you explicitly ask for it with trait objects (intermediate track). Unlike Java or C#, values have **no object header**: an <Term id="array">array</Term> of a million `Rectangle`s is 8 MB of contiguous `u32` pairs, with no per-object allocation and no pointer chasing.
 </Callout>
 
 ## Enums are algebraic data types
 
-In C, Java or TypeScript an `enum` is a set of named constants. In Rust each variant can carry its **own data**, with its own shape. This is a *sum type*: a `Message` is exactly one of these variants, and which one is recorded in a small hidden tag.
+In C, Java or TypeScript an `enum` is a set of named constants. In Rust each <Term id="variant">variant</Term> can carry its **own data**, with its own shape. This is a *<Term id="sum-type">sum type</Term>*: a `Message` is exactly one of these variants, and which one is recorded in a small hidden <Term id="discriminant">tag</Term>.
 
 <Compare left="TypeScript">
 ```ts
@@ -129,11 +129,11 @@ fn describe(m: &Message) -> String {
 ```
 </Compare>
 
-The TypeScript version is a convention enforced by the type checker on top of plain objects. In Rust the tag is part of the value, the payload can only be reached by matching on it, and the size of the enum is the size of its largest variant plus the tag.
+The TypeScript version is a convention enforced by the type checker on top of plain objects. In Rust the tag is part of the value, the payload can only be reached by <Term id="match">matching</Term> on it, and the size of the enum is the size of its largest variant plus the tag.
 
 ### Option instead of null
 
-The billion-dollar mistake is solved with a regular enum from the standard library:
+The billion-dollar mistake is solved with a regular enum from the <Term id="std">standard library</Term>:
 
 ```rust
 enum Option<T> {
@@ -142,7 +142,7 @@ enum Option<T> {
 }
 ```
 
-A function that may not find a user returns `Option<&str>`, not a `&str` that might secretly be null. You *cannot* call string methods on an `Option<&str>`: you have to decide what happens in the `None` case first, by matching or with helpers like `unwrap_or`, `map` and `?` (next lesson).
+A function that may not find a user returns <Term id="option">`Option<&str>`</Term>, not a <Term id="str">`&str`</Term> that might secretly be null. You *cannot* call string methods on an `Option<&str>`: you have to decide what happens in the `None` case first, by matching or with helpers like `unwrap_or`, `map` and <Term id="question-mark">`?`</Term> (next lesson).
 
 <Playground title="Enums with data and Option">
 ```rust
@@ -200,12 +200,12 @@ fn main() {
 </Playground>
 
 <Callout type="runtime" title="Option is free for references">
-The last line prints the same size twice. A reference can never be null, so the compiler uses the all-zero bit pattern, which is otherwise impossible, to represent `None`. This **niche optimization** means `Option<&T>`, `Option<Box<T>>` and `Option<NonZeroU32>` cost nothing over the raw type: you get null safety with the exact memory representation of a nullable pointer in C.
+The last line prints the same size twice. A <Term id="reference">reference</Term> can never be null, so the compiler uses the all-zero bit pattern, which is otherwise impossible, to represent `None`. This **<Term id="niche-optimization">niche optimization</Term>** means `Option<&T>`, `Option<Box<T>>` and `Option<NonZeroU32>` cost nothing over the raw type: you get null safety with the exact memory representation of a nullable pointer in C.
 </Callout>
 
 ## match must be exhaustive
 
-`match` compares a value against patterns from top to bottom and runs the first arm that matches. It is an expression, so every arm must produce the same type. The crucial property is **exhaustiveness**: if some possible value has no arm, the program does not compile. Try it:
+`match` compares a value against patterns from top to bottom and runs the first <Term id="match-arm">arm</Term> that matches. It is an <Term id="expression">expression</Term>, so every arm must produce the same type. The crucial property is **<Term id="exhaustiveness">exhaustiveness</Term>**: if some possible value has no arm, the program does not compile. Try it:
 
 <MatchExhaustiveness />
 
@@ -235,11 +235,11 @@ The error names the missing value exactly: `0_i32` not covered.
 Patterns appear in `match`, but also in `let`, function parameters and `for` loops. The main building blocks:
 
 - **Literals and ranges**: `0`, `'a'..='z'`, `400..=499`.
-- **Destructuring**: `Point { x, y }`, `(a, b)`, `[first, .., last]`, `Some(inner)`, nested as deep as you like.
-- **Wildcards**: `_` ignores one value, `..` ignores the remaining fields or elements.
-- **Or-patterns**: `A | B`, as long as both sides bind the same names.
+- **<Term id="destructuring">Destructuring</Term>**: `Point { x, y }`, `(a, b)`, `[first, .., last]`, `Some(inner)`, nested as deep as you like.
+- **<Term id="wildcard">Wildcards</Term>**: `_` ignores one value, `..` ignores the remaining fields or elements.
+- **Or-patterns**: `A | B`, as long as both sides <Term id="binding">bind</Term> the same names.
 - **Bindings**: `n @ 1..=9` tests against a pattern *and* keeps the value.
-- **Guards**: `if condition` after a pattern adds an arbitrary boolean check. Guards are not considered for exhaustiveness, as the widget above shows.
+- **<Term id="guard">Guards</Term>**: `if condition` after a pattern adds an arbitrary boolean check. Guards are not considered for exhaustiveness, as the widget above shows.
 
 <Playground title="Patterns, guards and bindings">
 ```rust
@@ -278,8 +278,8 @@ Arm order matters: `(0, 0)` would also match the axis arm, but the first matchin
 
 When you only care about one pattern, a full `match` is noisy. Two shorter forms exist:
 
-- `if let Some(x) = value { … } else { … }` runs a block only when the pattern matches.
-- `let Some(x) = value else { return …; };` binds the variables in the *current* scope and requires the `else` block to diverge (`return`, `break`, `continue` or panic). It is the idiomatic "guard clause" and keeps the happy path unindented.
+- <Term id="if-let">`if let Some(x) = value { … } else { … }`</Term> runs a block only when the pattern matches.
+- <Term id="let-else">`let Some(x) = value else { return …; };`</Term> binds the variables in the *current* <Term id="scope">scope</Term> and requires the `else` block to <Term id="diverging">diverge</Term> (`return`, `break`, `continue` or <Term id="panic">panic</Term>). It is the idiomatic "guard clause" and keeps the happy path unindented.
 
 <Playground title="if let and let else">
 ```rust
@@ -311,7 +311,7 @@ fn main() {
 </Playground>
 
 <Callout type="compare" from="Java / C#">
-Modern Java (sealed interfaces + records + pattern matching for `switch`) and C# (records + switch expressions) are converging on the same idea. The difference is that in Rust this is the *default* way to model data, the standard library is built on it (`Option`, `Result`, `Ordering`, `Cow`), and enums are stack values with no allocation per variant.
+Modern Java (sealed interfaces + records + pattern matching for `switch`) and C# (records + switch expressions) are converging on the same idea. The difference is that in Rust this is the *default* way to model data, the standard library is built on it (`Option`, <Term id="result">`Result`</Term>, `Ordering`, `Cow`), and enums are <Term id="stack">stack</Term> values with no allocation per variant.
 </Callout>
 
 ## Key takeaways

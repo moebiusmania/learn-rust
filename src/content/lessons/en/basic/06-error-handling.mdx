@@ -13,8 +13,8 @@ Rust separates failures into two categories and gives each its own mechanism:
 
 | | Recoverable error | Bug / broken invariant |
 | --- | --- | --- |
-| Examples | File not found, invalid user input, network timeout | Index out of bounds, `unwrap()` on `None`, integer overflow in debug |
-| Mechanism | `Result<T, E>` returned as a value | `panic!`: unwind the thread and stop |
+| Examples | File not found, invalid user input, network timeout | Index out of bounds, <Term id="unwrap">`unwrap()`</Term> on `None`, <Term id="overflow">integer overflow</Term> in <Term id="profile">debug</Term> |
+| Mechanism | <Term id="result">`Result<T, E>`</Term> returned as a value | <Term id="panic">`panic!`</Term>: <Term id="unwinding">unwind</Term> the thread and stop |
 | Visible in the signature | Yes | No |
 | Caller's job | Handle or propagate it | Nothing: fix the code |
 
@@ -47,7 +47,7 @@ fn main() {
 The first four lines are ordinary control flow. The last line is a crash with a clear message, a source location and exit code 101. `unwrap()` and `expect("why this cannot fail")` convert a `None` or an `Err` into a panic: fine in tests, prototypes and when an invariant truly guarantees success, a code smell everywhere else.
 
 <Callout type="runtime" title="What a panic actually does">
-By default a panic **unwinds** the stack of the current thread: every live value is dropped in reverse order, so files are closed and locks released, then the thread ends. If it is the main thread, the process exits with code 101. Another thread's panic can be observed through `JoinHandle::join`. With `panic = "abort"` in the Cargo profile the process aborts immediately instead, which makes binaries smaller and is common in embedded code. Panics are not exceptions: `catch_unwind` exists for FFI boundaries and thread pools, not for control flow.
+By default a panic **unwinds** the <Term id="stack">stack</Term> of the current thread: every live value is <Term id="drop">dropped</Term> in reverse order, so files are closed and locks released, then the thread ends. If it is the main thread, the process exits with code 101. Another thread's panic can be observed through `JoinHandle::join`. With `panic = "abort"` in the <Term id="cargo">Cargo</Term> profile the process aborts immediately instead, which makes binaries smaller and is common in embedded code. Panics are not exceptions: `catch_unwind` exists for <Term id="ffi">FFI</Term> boundaries and thread pools, not for control flow.
 </Callout>
 
 ## Result and Option are ordinary enums
@@ -61,14 +61,14 @@ enum Result<T, E> {
 }
 ```
 
-Because they are plain values you can store them, put them in a `Vec`, and transform them with methods instead of nesting `match` everywhere. The most useful combinators:
+Because they are plain values you can store them, put them in a <Term id="vec">`Vec`</Term>, and transform them with <Term id="method">methods</Term> instead of nesting <Term id="match">`match`</Term> everywhere. The most useful <Term id="combinator">combinators</Term>:
 
 | Method | On | What it does |
 | --- | --- | --- |
 | `map(f)` | both | Transform the success value, keep the failure |
 | `and_then(f)` | both | Chain another fallible step (`flatMap`) |
 | `unwrap_or(v)` / `unwrap_or_default()` | both | Fall back to a value |
-| `ok_or(err)` | `Option` | Turn `None` into a specific `Err` |
+| `ok_or(err)` | <Term id="option">`Option`</Term> | Turn `None` into a specific `Err` |
 | `ok()` | `Result` | Discard the error, keep an `Option` |
 | `map_err(f)` | `Result` | Transform or enrich the error |
 
@@ -97,14 +97,14 @@ fn main() {
 
 ## The ? operator
 
-Most of the time a function cannot handle an error itself and wants to pass it to its caller. That is what `?` does: applied to a `Result`, it either unwraps the `Ok` value or **returns early** from the enclosing function with the `Err`. Choose which call fails and step through it:
+Most of the time a function cannot handle an error itself and wants to pass it to its caller. That is what <Term id="question-mark">`?`</Term> does: applied to a `Result`, it either unwraps the `Ok` value or **returns early** from the enclosing function with the `Err`. Choose which call fails and step through it:
 
 <QuestionMarkFlow />
 
 Two details hidden in that expansion matter:
 
 1. `?` can only be used inside a function that itself returns `Result` (or `Option`, for `Option` values). Propagation is visible in every signature along the way.
-2. The error goes through `From::from` before being returned. That is how a low-level `ParseIntError` becomes your application's error type without any explicit conversion at the call site.
+2. The error goes through <Term id="from-into">`From::from`</Term> before being returned. That is how a low-level `ParseIntError` becomes your application's error type without any explicit conversion at the call site.
 
 <Compare left="Go">
 ```go
@@ -135,7 +135,7 @@ Same semantics as Go's explicit checks, with one difference that matters: in Go 
 
 ## Designing error types
 
-For a library, the idiomatic error is an **enum** with one variant per failure mode, implementing `Display` (the human-readable message), `std::error::Error` (the common interface) and `From` for each underlying error you want `?` to convert automatically.
+For a library, the idiomatic error is an **<Term id="enum">enum</Term>** with one <Term id="variant">variant</Term> per failure mode, implementing <Term id="display-trait">`Display`</Term> (the human-readable message), <Term id="error-trait">`std::error::Error`</Term> (the common interface) and `From` for each underlying error you want `?` to convert automatically.
 
 <Playground title="A custom error enum with From conversions">
 ```rust
@@ -188,7 +188,7 @@ fn main() {
 ```
 </Playground>
 
-Callers can `match` on `ConfigError` to react differently to a missing key and to a bad number. Remove the `From` implementation and the `?` on `value.parse()` stops compiling, because the compiler no longer knows how to turn one error type into the other. The same thing happens here, where the target error is a plain `String`:
+Callers can `match` on `ConfigError` to react differently to a missing key and to a bad number. Remove the `From` implementation and the `?` on `value.parse()` stops compiling, because the compiler no longer knows how to turn one error type into the other. The same thing happens here, where the target error is a plain <Term id="string">`String`</Term>:
 
 <Playground title="? needs a From conversion" expectError>
 ```rust
@@ -205,7 +205,7 @@ fn main() {
 
 ### `Box<dyn Error>` for applications
 
-In application code you often just want to bubble any error up and print it. `Box<dyn Error>` is a heap-allocated "any error" type: every type implementing `Error` converts into it through `?`, and so does a `&str` message. `main` itself may return a `Result`; if it returns `Err`, Rust prints the error's `Debug` form and exits with code 1.
+In application code you often just want to bubble any error up and print it. <Term id="box-dyn-error">`Box<dyn Error>`</Term> is a <Term id="heap">heap</Term>-allocated "any error" type: every type implementing `Error` converts into it through `?`, and so does a <Term id="str">`&str`</Term> message. `main` itself may return a `Result`; if it returns `Err`, Rust prints the error's <Term id="debug-trait">`Debug`</Term> form and exits with code 1.
 
 <Playground title="Box<dyn Error> and main returning Result">
 ```rust
@@ -234,7 +234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 </Playground>
 
 <Callout type="tip" title="thiserror and anyhow">
-Two crates cover nearly all real-world needs. **thiserror** generates the `Display`, `Error` and `From` boilerplate of a library error enum from attributes such as `#[error("missing key {0}")]` and `#[from]`. **anyhow** provides `anyhow::Result<T>`, a better `Box<dyn Error>` that can attach context: `read(path).with_context(|| format!("reading {path}"))?`. The rule of thumb: thiserror for libraries, whose callers need to match on errors; anyhow for applications, which mostly need to report them.
+Two <Term id="crate">crates</Term> cover nearly all real-world needs. **<Term id="thiserror">thiserror</Term>** generates the `Display`, `Error` and `From` boilerplate of a library error enum from <Term id="attribute">attributes</Term> such as `#[error("missing key {0}")]` and `#[from]`. **<Term id="anyhow">anyhow</Term>** provides `anyhow::Result<T>`, a better `Box<dyn Error>` that can attach context: `read(path).with_context(|| format!("reading {path}"))?`. The rule of thumb: thiserror for libraries, whose callers need to match on errors; anyhow for applications, which mostly need to report them.
 </Callout>
 
 <Callout type="compare" from="Java / Python">

@@ -5,15 +5,15 @@ duration: 25
 tags: [Vec, slice, String, "&str", UTF-8, HashMap]
 ---
 
-Tre tipi coprono la maggior parte dei dati di tutti i giorni in Rust: `Vec<T>`, `String` e `HashMap<K, V>`. Nessuno di loro è speciale: sono normali struct di libreria che possiedono un buffer sullo heap, quindi tutto ciò che hai imparato su ownership e borrowing si applica senza modifiche. Quello che cambia è quanto del loro comportamento in memoria ora riesci a *vedere*.
+Tre tipi coprono la maggior parte dei dati di tutti i giorni in Rust: <Term id="vec">`Vec<T>`</Term>, <Term id="string">`String`</Term> e <Term id="hashmap">`HashMap<K, V>`</Term>. Nessuno di loro è speciale: sono normali <Term id="struct">struct</Term> di libreria che possiedono un buffer sullo <Term id="heap">heap</Term>, quindi tutto ciò che hai imparato su <Term id="ownership">ownership</Term> e <Term id="borrow">borrowing</Term> si applica senza modifiche. Quello che cambia è quanto del loro comportamento in memoria ora riesci a *vedere*.
 
 ## Vec: un array che cresce
 
-Un `Vec<T>` è fatto di tre word sullo stack: un **puntatore** a un buffer sullo heap, la **lunghezza** (quanti elementi sono inizializzati) e la **capacità** (quanti ne entrano prima che il buffer debba crescere). Quando `len` raggiunge `capacity`, `push` alloca un buffer più grande, vi sposta gli elementi e libera quello vecchio. Prova:
+Un `Vec<T>` è fatto di tre word sullo <Term id="stack">stack</Term>: un **puntatore** a un buffer sullo heap, la **lunghezza** (quanti elementi sono inizializzati) e la **<Term id="capacity">capacità</Term>** (quanti ne entrano prima che il buffer debba crescere). Quando `len` raggiunge `capacity`, `push` alloca un buffer più grande, vi sposta gli elementi e libera quello vecchio. Prova:
 
 <VecGrowth />
 
-Raddoppiare la capacità rende `push` O(1) *ammortizzato*: il costo totale di tutte le copie resta proporzionale al numero di elementi. Se conosci la dimensione finale, `Vec::with_capacity(n)` evita del tutto le riallocazioni.
+Raddoppiare la capacità rende `push` O(1) *<Term id="amortized">ammortizzato</Term>*: il costo totale di tutte le copie resta proporzionale al numero di elementi. Se conosci la dimensione finale, `Vec::with_capacity(n)` evita del tutto le <Term id="reallocation">riallocazioni</Term>.
 
 <Playground title="Vec, capacità e slice">
 ```rust
@@ -45,10 +45,10 @@ fn main() {
 
 ### Slice: viste in prestito
 
-`&[T]` è uno **slice**: un puntatore più una lunghezza, che prende in prestito una sequenza contigua di `T` posseduta da qualcun altro. `&v[1..4]` prende in prestito una parte di un vettore, `&v` lo prende tutto, e gli array si convertono allo stesso modo. Una funzione che legge soltanto una sequenza dovrebbe accettare `&[T]`, non `&Vec<T>`: così accetta vettori, array e sottointervalli, senza alcun costo.
+`&[T]` è uno **<Term id="slice">slice</Term>**: un puntatore più una lunghezza, che prende in prestito una sequenza contigua di `T` posseduta da qualcun altro. `&v[1..4]` prende in prestito una parte di un vettore, `&v` lo prende tutto, e gli <Term id="array">array</Term> si convertono allo stesso modo. Una funzione che legge soltanto una sequenza dovrebbe accettare `&[T]`, non `&Vec<T>`: così accetta vettori, array e sottointervalli, senza alcun costo.
 
 <Callout type="runtime" title="Perché un push può invalidare i riferimenti">
-Una riallocazione *sposta* gli elementi a un nuovo indirizzo. Qualsiasi riferimento al vecchio buffer punterebbe ora a memoria liberata: in C++ è il classico bug di invalidazione degli iteratori. In Rust, tenere un `&` dentro un `Vec` significa prendere in prestito l'intero `Vec`, e `push` richiede `&mut self`, quindi le due cose non possono sovrapporsi. Il compilatore rifiuta il bug prima ancora che esista:
+Una riallocazione *sposta* gli elementi a un nuovo indirizzo. Qualsiasi <Term id="reference">riferimento</Term> al vecchio buffer punterebbe ora a memoria liberata: in C++ è il classico bug di <Term id="iterator-invalidation">invalidazione degli iteratori</Term>. In Rust, tenere un <Term id="shared-reference">`&`</Term> dentro un `Vec` significa prendere in prestito l'intero `Vec`, e `push` richiede <Term id="mutable-reference">`&mut self`</Term>, quindi le due cose non possono sovrapporsi. Il compilatore rifiuta il bug prima ancora che esista:
 </Callout>
 
 <Playground title="Modificare un Vec mentre lo si scorre" expectError>
@@ -66,7 +66,7 @@ fn main() {
 </Playground>
 
 <Callout type="compare" from="Java / C++">
-Java lo rileva a runtime con una `ConcurrentModificationException`, se il ciclo viene effettivamente eseguito. C++ non lo rileva affatto: è undefined behaviour. Rust lo segnala in compilazione come un normale errore di borrowing (E0502). La soluzione è raccogliere prima le modifiche e applicarle dopo il ciclo, oppure usare metodi come `retain`, `extend` o `iter().position()`.
+Java lo rileva a runtime con una `ConcurrentModificationException`, se il ciclo viene effettivamente eseguito. C++ non lo rileva affatto: è <Term id="ub">undefined behaviour</Term>. Rust lo segnala in compilazione come un normale errore di borrowing (E0502). La soluzione è raccogliere prima le modifiche e applicarle dopo il ciclo, oppure usare <Term id="method">metodi</Term> come `retain`, `extend` o `iter().position()`.
 </Callout>
 
 ## String e &str
@@ -75,12 +75,12 @@ Rust ha due tipi di stringa principali, e la divisione rispecchia quella tra `Ve
 
 | Tipo | Cos'è | Possiede i dati | Uso tipico |
 | --- | --- | --- | --- |
-| `String` | Un `Vec<u8>` che garantisce UTF-8 valido | Sì | Costruire e memorizzare testo |
-| `&str` | Uno slice di byte UTF-8 (puntatore + lunghezza) | No | Leggere testo, parametri delle funzioni |
-| `&'static str` | Un `&str` che punta dentro il binario stesso | No | Letterali come `"hello"` |
-| `char` | Un singolo Unicode scalar value, sempre 4 byte | — | Caratteri singoli |
+| `String` | Un `Vec<u8>` che garantisce <Term id="utf-8">UTF-8</Term> valido | Sì | Costruire e memorizzare testo |
+| <Term id="str">`&str`</Term> | Uno slice di byte UTF-8 (puntatore + lunghezza) | No | Leggere testo, parametri delle funzioni |
+| <Term id="static-lifetime">`&'static str`</Term> | Un `&str` che punta dentro il binario stesso | No | <Term id="string-literal">Letterali</Term> come `"hello"` |
+| <Term id="char">`char`</Term> | Un singolo <Term id="unicode-scalar-value">Unicode scalar value</Term>, sempre 4 byte | — | Caratteri singoli |
 
-Come per gli slice, preferisci `&str` per i parametri: un `&String` viene convertito automaticamente in `&str`, e lo stesso vale per un letterale.
+Come per gli slice, preferisci `&str` per i parametri: un `&String` <Term id="deref-coercion">viene convertito automaticamente</Term> in `&str`, e lo stesso vale per un letterale.
 
 <Playground title="String, &str e UTF-8">
 ```rust
@@ -122,20 +122,20 @@ let s = String::from("hey");
 let c = s[0]; // error[E0277]: the type `str` cannot be indexed by `{integer}`
 ```
 
-Il motivo è che le stringhe sono UTF-8, una codifica a larghezza variabile: `è` occupa 2 byte, `🦀` ne occupa 4. "Il carattere all'indice 5" non si può trovare in O(1), e "carattere" è comunque ambiguo: byte, Unicode scalar value o grafema percepito dall'utente (un'emoji con un modificatore di carnagione è fatta di più scalar value)? Rust ti obbliga a dire quale intendi:
+Il motivo è che le stringhe sono UTF-8, una codifica a larghezza variabile: `è` occupa 2 byte, `🦀` ne occupa 4. "Il carattere all'indice 5" non si può trovare in O(1), e "carattere" è comunque ambiguo: byte, Unicode scalar value o <Term id="grapheme">grafema</Term> percepito dall'utente (un'emoji con un modificatore di carnagione è fatta di più scalar value)? Rust ti obbliga a dire quale intendi:
 
 - `s.as_bytes()[i]` per i byte, O(1).
 - `s.chars().nth(i)` per gli Unicode scalar value, O(n).
-- `&s[a..b]` per una sottostringa tramite un intervallo di **byte**, che va in panic se `a` o `b` cadono a metà di un carattere.
-- Per i grafemi serve un crate come `unicode-segmentation`.
+- `&s[a..b]` per una sottostringa tramite un intervallo di **byte**, che va in <Term id="panic">panic</Term> se `a` o `b` cadono a metà di un carattere.
+- Per i grafemi serve un <Term id="crate">crate</Term> come `unicode-segmentation`.
 
 <Callout type="compare" from="JavaScript / Python / Java">
-Le stringhe di JavaScript e Java sono internamente in UTF-16, quindi `"🦀".length` vale 2 e l'indicizzazione può spezzare un carattere a metà. Python 3 sceglie per ogni stringa una rappresentazione a larghezza fissa (1, 2 o 4 byte per code point) per rendere l'indicizzazione O(1), al prezzo di memoria e conversioni. Rust usa UTF-8 ovunque, la stessa codifica di file e rete, e sposta il costo nei rari punti in cui serve davvero l'accesso posizionale.
+Le stringhe di JavaScript e Java sono internamente in <Term id="utf-16">UTF-16</Term>, quindi `"🦀".length` vale 2 e l'indicizzazione può spezzare un carattere a metà. Python 3 sceglie per ogni stringa una rappresentazione a larghezza fissa (1, 2 o 4 byte per code point) per rendere l'indicizzazione O(1), al prezzo di memoria e conversioni. Rust usa UTF-8 ovunque, la stessa codifica di file e rete, e sposta il costo nei rari punti in cui serve davvero l'accesso posizionale.
 </Callout>
 
 ## HashMap e la entry API
 
-`HashMap<K, V>` si trova in `std::collections` e funziona con qualsiasi tipo di chiave che implementi `Eq` e `Hash` (derivabili per i tuoi tipi). Le ricerche restituiscono `Option<&V>` invece di `null` o di un `KeyError`. La **entry API** gestisce lo schema "inserisci se manca, poi aggiorna" con una sola ricerca nella tabella, e senza il problema del doppio borrow in cui incapperesti con un `get` seguito da un `insert`.
+`HashMap<K, V>` si trova in `std::collections` e funziona con qualsiasi tipo di chiave che implementi `Eq` e `Hash` (<Term id="derive">derivabili</Term> per i tuoi tipi). Le ricerche restituiscono <Term id="option">`Option<&V>`</Term> invece di `null` o di un `KeyError`. La **<Term id="entry-api">entry API</Term>** gestisce lo schema "inserisci se manca, poi aggiorna" con una sola ricerca nella tabella, e senza il problema del doppio borrow in cui incapperesti con un `get` seguito da un `insert`.
 
 <Playground title="Contare le parole con entry">
 ```rust
@@ -168,17 +168,17 @@ fn main() {
 ```
 </Playground>
 
-Due comportamenti predefiniti da conoscere: l'ordine di iterazione **non è specificato** (cambia da un'esecuzione all'altra), e l'hasher predefinito, SipHash 1-3, è scelto per resistere agli attacchi di hash flooding più che per la velocità pura. Usa `BTreeMap` quando ti servono chiavi ordinate, e un hasher più veloce come `ahash` o `rustc-hash` quando le chiavi non sono controllate da un potenziale attaccante.
+Due comportamenti predefiniti da conoscere: l'ordine di iterazione **non è specificato** (cambia da un'esecuzione all'altra), e l'<Term id="hasher">hasher</Term> predefinito, SipHash 1-3, è scelto per resistere agli attacchi di <Term id="hash-flooding">hash flooding</Term> più che per la velocità pura. Usa <Term id="btreemap">`BTreeMap`</Term> quando ti servono chiavi ordinate, e un hasher più veloce come `ahash` o `rustc-hash` quando le chiavi non sono controllate da un potenziale attaccante.
 
 ## Tre modi di iterare
 
-Un ciclo `for` chiama `IntoIterator` su ciò che gli passi, e la forma che scegli decide cosa sia ogni elemento:
+Un ciclo `for` chiama <Term id="into-iterator">`IntoIterator`</Term> su ciò che gli passi, e la forma che scegli decide cosa sia ogni elemento:
 
 | Ciclo | Tipo dell'elemento | Effetto sulla collezione |
 | --- | --- | --- |
 | `for x in &v` | `&T` | In prestito, invariata, utilizzabile dopo |
 | `for x in &mut v` | `&mut T` | In prestito esclusivo, gli elementi si possono modificare |
-| `for x in v` | `T` | Spostata: la collezione viene consumata |
+| `for x in v` | `T` | <Term id="move">Spostata</Term>: la collezione viene consumata |
 
 <Playground title="Per riferimento, per riferimento mutabile, per valore">
 ```rust

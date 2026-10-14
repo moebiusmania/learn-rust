@@ -5,11 +5,11 @@ duration: 25
 tags: [references, "&mut", borrow checker, NLL, slices]
 ---
 
-Moving ownership in and out of every function would be unbearable. Most code only needs to *look at* a value, or change it briefly, and then hand it back. That is what **references** are for: you **borrow** a value, and the owner keeps it. The compiler component that checks borrows, the *borrow checker*, enforces one simple rule that turns out to rule out data races, iterator invalidation and dangling pointers at once.
+<Term id="move">Moving</Term> <Term id="ownership">ownership</Term> in and out of every function would be unbearable. Most code only needs to *look at* a value, or change it briefly, and then hand it back. That is what **<Term id="reference">references</Term>** are for: you **<Term id="borrow">borrow</Term>** a value, and the owner keeps it. The compiler component that checks borrows, the *<Term id="borrow-checker">borrow checker</Term>*, enforces <Term id="aliasing-xor-mutability">one simple rule</Term> that turns out to rule out <Term id="data-race">data races</Term>, <Term id="iterator-invalidation">iterator invalidation</Term> and <Term id="dangling-reference">dangling pointers</Term> at once.
 
 ## Shared references: `&T`
 
-`&value` creates a shared reference. The function receives a pointer, the caller keeps ownership, and nothing is copied or freed.
+`&value` creates a <Term id="shared-reference">shared reference</Term>. The function receives a pointer, the caller keeps ownership, and nothing is copied or freed.
 
 ```rust
 fn count_words(text: &str) -> usize {
@@ -25,7 +25,7 @@ Through a `&T` you can read but not modify. You can create as many shared refere
 
 ## Mutable references: `&mut T`
 
-To modify a borrowed value you need an exclusive reference, `&mut T`. Both the binding and the borrow must be explicitly mutable, and the call site says `&mut`, so mutation is visible where it happens, not only in the function signature.
+To modify a borrowed value you need an exclusive reference, <Term id="mutable-reference">`&mut T`</Term>. Both the <Term id="binding">binding</Term> and the borrow must be explicitly <Term id="mut">mutable</Term>, and the call site says `&mut`, so mutation is visible where it happens, not only in the function signature.
 
 <Playground title="Reading and writing through references">
 ```rust
@@ -50,7 +50,7 @@ fn main() {
 ```
 </Playground>
 
-Note that `total` accepts `&[i32]`, a slice, and we pass `&data`, a `&Vec<i32>`. The compiler converts automatically (*deref coercion*), so functions that only read should take slices and `&str` rather than `&Vec<T>` and `&String`: they then work with arrays, vectors and parts of them.
+Note that `total` accepts `&[i32]`, a <Term id="slice">slice</Term>, and we pass `&data`, a <Term id="vec">`&Vec<i32>`</Term>. The compiler converts automatically (*<Term id="deref-coercion">deref coercion</Term>*), so functions that only read should take slices and <Term id="str">`&str`</Term> rather than `&Vec<T>` and <Term id="string">`&String`</Term>: they then work with <Term id="array">arrays</Term>, vectors and parts of them.
 
 ## The rule: aliasing XOR mutability
 
@@ -65,7 +65,7 @@ Explore the four scenarios below. Each bar is a borrow, alive from where it is c
 
 <BorrowTimeline />
 
-Why is this rule worth the friction? Because almost every memory bug involving aliasing is a case of *someone modifying data while someone else holds a pointer into it*. Scenario 2 is the canonical example:
+Why is this rule worth the friction? Because almost every memory bug involving <Term id="aliasing">aliasing</Term> is a case of *someone modifying data while someone else holds a pointer into it*. Scenario 2 is the canonical example:
 
 <Playground title="Reading while writing" expectError>
 ```rust
@@ -78,15 +78,15 @@ fn main() {
 ```
 </Playground>
 
-`push` may need more capacity, in which case it allocates a bigger buffer, copies the elements and frees the old one. `first` would then point to freed memory. In C++ the equivalent code with `std::vector` compiles and is undefined behaviour. Rust reports `cannot borrow v as mutable because it is also borrowed as immutable`. Move the `println!` above the `push` and it compiles.
+`push` may need more <Term id="capacity">capacity</Term>, in which case it allocates a bigger buffer, copies the elements and frees the old one. `first` would then point to freed memory. In C++ the equivalent code with `std::vector` compiles and is <Term id="ub">undefined behaviour</Term>. Rust reports `cannot borrow v as mutable because it is also borrowed as immutable`. Move the `println!` above the `push` and it compiles.
 
 <Callout type="runtime">
-References are plain machine pointers, with no reference count, no lock and no runtime bookkeeping: the borrow checker runs at compile time on MIR and then disappears. As a bonus, the guarantee that a `&mut T` is never aliased lets rustc tell LLVM that the pointer is `noalias`, which unlocks optimizations that C compilers can only apply when you promise `restrict`.
+References are plain machine pointers, with no reference count, no lock and no runtime bookkeeping: the borrow checker runs at compile time on <Term id="mir">MIR</Term> and then disappears. As a bonus, the guarantee that a `&mut T` is never aliased lets <Term id="rustc">rustc</Term> tell <Term id="llvm">LLVM</Term> that the pointer is <Term id="noalias">`noalias`</Term>, which unlocks optimizations that C compilers can only apply when you promise `restrict`.
 </Callout>
 
 ## Non-lexical lifetimes
 
-A borrow lasts until its **last use**, not until the end of the enclosing block. This is called *non-lexical lifetimes* (NLL), and it has been the default since Rust 2018. Scenario 4 in the timeline shows it: `r1` stops being used on line 3, so a new borrow on line 4 is fine even though `r1` is still syntactically in scope.
+A borrow lasts until its **last use**, not until the end of the enclosing block. This is called *<Term id="nll">non-lexical lifetimes</Term>* (NLL), and it has been the default since <Term id="edition">Rust 2018</Term>. Scenario 4 in the timeline shows it: `r1` stops being used on line 3, so a new borrow on line 4 is fine even though `r1` is still syntactically in <Term id="scope">scope</Term>.
 
 In practice this means you can often fix a borrow error by *reordering* code: finish using the shared reference, then mutate. If you meet older blog posts with odd extra `{ }` blocks around borrows, that is a pre-2018 workaround that is rarely needed now.
 
@@ -151,15 +151,15 @@ fn dangle() -> &String {
 //       but there is no value for it to be borrowed from
 ```
 
-A function that creates a value cannot return a reference to it: return the owned `String` instead, and let the caller own it. The general mechanism behind this check, **lifetimes**, is the subject of a lesson in the intermediate track; for now remember that a returned reference must point into one of the inputs.
+A function that creates a value cannot return a reference to it: return the owned `String` instead, and let the caller own it. The general mechanism behind this check, **<Term id="lifetime">lifetimes</Term>**, is the subject of a lesson in the intermediate track; for now remember that a returned reference must point into one of the inputs.
 
 <Callout type="compare" from="Go">
-Go's escape analysis silently moves `s` to the heap so that `&s` stays valid, and the garbage collector frees it later. Rust never changes where a value lives behind your back: it rejects the reference and asks you to decide who owns the data.
+Go's <Term id="escape-analysis">escape analysis</Term> silently moves `s` to the <Term id="heap">heap</Term> so that `&s` stays valid, and the <Term id="garbage-collector">garbage collector</Term> frees it later. Rust never changes where a value lives behind your back: it rejects the reference and asks you to decide who owns the data.
 </Callout>
 
 ## Slices: borrowing part of a collection
 
-A **slice** is a reference to a contiguous range of elements: `&[T]` for arrays and vectors, `&str` for strings. It is a *fat pointer*: an address plus a length, 16 bytes on 64-bit targets.
+A **slice** is a reference to a contiguous range of elements: `&[T]` for arrays and vectors, `&str` for strings. It is a *<Term id="fat-pointer">fat pointer</Term>*: an address plus a length, 16 bytes on 64-bit <Term id="target">targets</Term>.
 
 <Playground title="Slices are borrows too">
 ```rust
@@ -185,7 +185,7 @@ fn main() {
 ```
 </Playground>
 
-Because `word` borrows from `sentence`, calling `sentence.clear()` *while `word` is still in use* would be rejected: a slice can never observe its source being truncated underneath it. Try moving the first `println!` below `clear()` to see the error. String slicing works on **byte** offsets and panics if you cut in the middle of a multi-byte UTF-8 character, so prefer methods like `find`, `split` and `char_indices` over hand-computed indices.
+Because `word` borrows from `sentence`, calling `sentence.clear()` *while `word` is still in use* would be rejected: a slice can never observe its source being truncated underneath it. Try moving the first `println!` below `clear()` to see the error. String slicing works on **byte** offsets and <Term id="panic">panics</Term> if you cut in the middle of a multi-byte <Term id="utf-8">UTF-8</Term> character, so prefer methods like `find`, `split` and `char_indices` over hand-computed indices.
 
 ## Key takeaways
 

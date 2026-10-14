@@ -30,4 +30,36 @@ const tracks = defineCollection({
   }),
 });
 
-export const collections = { lessons, tracks };
+/**
+ * Per-track glossary: src/content/glossary/<lang>/<track>.json.
+ * Lessons link to an entry with <Term id="…">; `see` lists related entry ids.
+ * Inline `code` in `term`, `aka` and `definition` is rendered as <code>.
+ */
+const glossary = defineCollection({
+  loader: glob({ pattern: '**/*.json', base: './src/content/glossary' }),
+  schema: z
+    .object({
+      intro: z.string(),
+      terms: z.array(
+        z.object({
+          id: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'ids are kebab-case'),
+          term: z.string(),
+          aka: z.array(z.string()).default([]),
+          definition: z.string(),
+          see: z.array(z.string()).default([]),
+        }),
+      ),
+    })
+    .superRefine(({ terms }, ctx) => {
+      const ids = new Set<string>();
+      for (const t of terms) {
+        if (ids.has(t.id)) ctx.addIssue({ code: 'custom', message: `Duplicate glossary id "${t.id}"` });
+        ids.add(t.id);
+      }
+      for (const t of terms)
+        for (const ref of t.see)
+          if (!ids.has(ref)) ctx.addIssue({ code: 'custom', message: `"${t.id}" sees unknown glossary id "${ref}"` });
+    }),
+});
+
+export const collections = { lessons, tracks, glossary };
