@@ -187,6 +187,31 @@ fn main() {
 
 Poiché `word` prende in prestito da `sentence`, chiamare `sentence.clear()` *mentre `word` è ancora in uso* verrebbe rifiutato: una slice non può mai vedere la sua sorgente troncata sotto i piedi. Prova a spostare il primo `println!` sotto `clear()` per vedere l'errore. Lo slicing delle stringhe lavora su offset in **byte** e va in <Term id="panic">panic</Term> se tagli a metà di un carattere <Term id="utf-8">UTF-8</Term> multi-byte, quindi preferisci metodi come `find`, `split` e `char_indices` agli indici calcolati a mano.
 
+## Verso il progetto
+
+La maggior parte delle funzioni di `ledger` deve solo *guardare* i dati, e le loro firme lo dicono. Queste sono le firme vere del programma finale:
+
+```rust
+fn load(path: &str) -> Result<Vec<Expense>, LedgerError>
+fn append(path: &str, expense: &Expense) -> Result<(), LedgerError>
+fn print_list(expenses: &[Expense], category: Option<&str>)
+fn totals_by_category(expenses: &[Expense]) -> Option<Vec<(&str, i64)>>
+```
+
+- `load` prende in prestito il percorso e restituisce dati **posseduti**: il chiamante riceve un `Vec` che può tenere.
+- `append` prende in prestito la spesa che scrive, così il chiamante può ancora stamparla dopo.
+- I report accettano `&[Expense]`, una slice, non `&Vec<Expense>`: leggono tutto e non possiedono niente.
+- `totals_by_category` restituisce nomi di categoria `&str` che puntano **dentro** `expenses`, quindi nessun nome viene copiato. Il borrow checker lega il risultato all'input: le spese non possono essere rilasciate o modificate finché i totali sono ancora in uso.
+
+La stessa idea risolve un piccolo problema in `main`. `std::env::args()` produce `String` possedute, ma il confronto con letterali stringa funziona su `&str`. Un secondo `Vec`, che oscura il primo, lo prende in prestito:
+
+```rust
+let args: Vec<String> = std::env::args().skip(1).collect();
+let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect(); // prende in prestito le String qui sopra
+```
+
+Lo shadowing nasconde il primo `args` ma non lo rilascia, quindi le `String` restano vive fino alla fine di `main` e ogni prestito resta valido.
+
 ## Punti chiave
 
 - `&T` prende in prestito per leggere, `&mut T` prende in prestito in esclusiva per scrivere; il proprietario mantiene il valore.

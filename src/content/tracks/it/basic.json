@@ -1,8 +1,8 @@
 {
   "title": "Base",
   "tagline": "Il modello mentale di Rust",
-  "summary": "Toolchain, tipi, ownership, borrowing, enum e gestione degli errori: le idee che servono prima di scrivere vero codice Rust.",
-  "intro": "A prima vista Rust sembra familiare: funzioni, struct, cicli, generici. La vera differenza è che il compilatore tiene traccia di chi possiede ogni valore e per quanto tempo. Questo percorso costruisce quel modello mentale passo dopo passo, confrontandolo con i linguaggi con garbage collector e con quelli a gestione manuale della memoria.",
+  "summary": "Toolchain, tipi, ownership, borrowing, enum e gestione degli errori: le idee che servono prima di scrivere vero codice Rust, messe insieme alla fine in una piccola app a riga di comando costruita da zero.",
+  "intro": "A prima vista Rust sembra familiare: funzioni, struct, cicli, generici. La vera differenza è che il compilatore tiene traccia di chi possiede ogni valore e per quanto tempo. Questo percorso costruisce quel modello mentale passo dopo passo, confrontandolo con i linguaggi con garbage collector e con quelli a gestione manuale della memoria. Ogni lezione contribuisce con un pezzo di un progetto finale, ledger, un gestore di spese a riga di comando che costruisci nell'ultima lezione usando solo la libreria standard.",
   "concepts": [
     { "title": "Compilato in anticipo", "text": "rustc produce un binario nativo tramite LLVM. Niente VM e niente JIT: quello che distribuisci è codice macchina più una libreria standard linkata staticamente." },
     { "title": "Nessun garbage collector", "text": "Ogni valore ha esattamente un proprietario. Quando il proprietario esce dallo scope il valore viene rilasciato (drop) in modo deterministico, in un punto che puoi leggere nel sorgente." },

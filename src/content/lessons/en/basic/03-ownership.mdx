@@ -186,6 +186,35 @@ Locals are dropped in **reverse order of declaration**, so later values, which m
 The compiler inserts drop calls during <Term id="mir">MIR</Term> construction, at every point where an owned value goes out of scope, including early `return`s, <Term id="question-mark">`?`</Term> and <Term id="panic">panics</Term> that <Term id="unwinding">unwind</Term>. When a value is only *conditionally* moved (for example inside an `if`), the compiler adds a hidden boolean **<Term id="drop-flag">drop flag</Term>** on the stack and checks it at the end of the scope. That is the entire runtime cost of ownership: usually nothing, occasionally one byte and a branch.
 </Callout>
 
+## Building toward the project
+
+`ledger` keeps its data in a text file, one expense per line, and loads it into a `Vec` of records. Ownership decides what those records look like:
+
+```rust
+struct Expense {
+    cents: i64,
+    category: String, // owned, not &str
+    note: String,
+}
+```
+
+The loader reads the whole file into one `String`, and each line is a borrowed view into it. If `Expense` stored `&str` slices of that buffer, the buffer would have to stay alive as long as any expense does. Owning the strings is simpler: each record copies its category and note once, while loading, and the file buffer is dropped as soon as the loader returns.
+
+```rust
+// simplified; the real version handles errors with `?`, from the error-handling lesson
+fn load(path: &str) -> Vec<Expense> {
+    let text = std::fs::read_to_string(path).unwrap(); // owns the whole file
+    let mut expenses = Vec::new();
+    for line in text.lines() {
+        // each `line` borrows from `text`; from_line copies what it keeps
+        expenses.push(Expense::from_line(line).unwrap());
+    }
+    expenses // moved out to the caller: only the Vec handle is copied
+} // `text` is dropped here and its buffer freed
+```
+
+Two more ownership ideas show up in the final program. Returning `expenses` moves the vector: the caller receives the same heap buffer, not a copy of every expense. And writing to the file needs no `close()` call: the `File` is dropped at the end of the function that opened it, on every path, which closes it.
+
 ## Key takeaways
 
 - Every value has exactly one owner; when the owner goes out of scope the value is dropped.

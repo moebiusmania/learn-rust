@@ -1,8 +1,8 @@
 ---
 title: Variables, types and expressions
 description: Immutable bindings, shadowing, a precise numeric tower, explicit overflow handling and a language where almost everything is an expression.
-duration: 20
-tags: [let, mut, shadowing, integers, overflow, expressions]
+duration: 30
+tags: [let, mut, shadowing, integers, floats, overflow, expressions]
 ---
 
 Rust's variables and primitive types look like the ones you already know, but three defaults are flipped: <Term id="binding">bindings</Term> are **immutable** unless you say otherwise, numeric conversions are **never implicit**, and blocks, `if` and <Term id="match">`match`</Term> are **<Term id="expression">expressions</Term>** that produce values. Each of these choices exists to make the code say exactly what it does.
@@ -80,18 +80,75 @@ static GREETING: &str = "hello";        // one fixed address in the binary
 
 ## A precise numeric tower
 
-Rust has no "number" type and no implicit widening. Every integer type states its size and signedness:
+Rust has no "number" type and no implicit widening. Every integer type states its size and signedness, and the size decides the range: an unsigned type of `N` bits holds `0` to `2^N − 1`, a signed one holds `−2^(N−1)` to `2^(N−1) − 1`.
 
-| Size | Signed | Unsigned | Notes |
-| --- | --- | --- | --- |
-| 8 bit | `i8` | `u8` | `u8` is the byte type |
-| 16 bit | `i16` | `u16` | |
-| 32 bit | `i32` | `u32` | default for integer literals |
-| 64 bit | `i64` | `u64` | |
-| 128 bit | `i128` | `u128` | |
-| pointer | <Term id="usize">`isize`</Term> | `usize` | indexes and lengths are `usize` |
+| Size | Signed | Unsigned | Signed range | Unsigned max | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 8 bit | `i8` | `u8` | −128 to 127 | 255 | `u8` is the byte type |
+| 16 bit | `i16` | `u16` | −32,768 to 32,767 | 65,535 | |
+| 32 bit | `i32` | `u32` | ±2.1 × 10⁹ | 4.3 × 10⁹ | default for integer literals |
+| 64 bit | `i64` | `u64` | ±9.2 × 10¹⁸ | 1.8 × 10¹⁹ | |
+| 128 bit | `i128` | `u128` | ±1.7 × 10³⁸ | 3.4 × 10³⁸ | |
+| pointer | <Term id="usize">`isize`</Term> | `usize` | as 64 or 32 bit | as 64 or 32 bit | indexes and lengths are `usize` |
+
+You never need to memorise the limits: every type exposes them as constants, such as `u8::MAX` (255), `i32::MIN` and `u64::BITS` (64).
 
 Floats are `f32` and `f64` (the default), `bool` is one byte, and <Term id="char">`char`</Term> is a 4-byte **<Term id="unicode-scalar-value">Unicode scalar value</Term>**, not a byte and not a <Term id="utf-16">UTF-16</Term> unit. Strings are <Term id="utf-8">UTF-8</Term>, so `'é'.len_utf8()` is 2 while `size_of::<char>()` is 4.
+
+### Coming from JavaScript: where did `number` go?
+
+JavaScript has only two numeric types, and both make a different trade-off from Rust's:
+
+- **`number`** is a 64-bit IEEE-754 float, exactly Rust's `f64`. Whole numbers in it are exact only up to `Number.MAX_SAFE_INTEGER` (2⁵³ − 1, about 9 × 10¹⁵); beyond that they silently round. The bitwise operators quietly convert to a 32-bit signed integer first, which is why `2 ** 31 | 0` is `-2147483648`.
+- **`bigint`** is an arbitrary-precision integer allocated on the heap. It never overflows, but every operation is a function call over a variable-length buffer, and it cannot be mixed with `number` without an explicit conversion.
+
+Rust instead offers many fixed-size types that map directly onto CPU registers. Arithmetic on them is a single machine instruction, a `u8` takes one byte in a struct or an array instead of eight, and the type documents (and the compiler enforces) which values are possible. If you have used JS **typed arrays**, you already know these types: `Uint8Array`, `Int32Array`, `Float32Array` and `BigInt64Array` store `u8`, `i32`, `f32` and `i64` values.
+
+<Compare left="JavaScript">
+```js
+const price = 19.99;              // number (a 64-bit float)
+const count = 3;                  // number (still a float, just whole)
+const bytes = new Uint8Array(4);  // four u8 values
+const id = 9007199254740993n;     // must be bigint: as a number it would round
+2 ** 53 + 1 === 2 ** 53;          // true: precision silently lost
+```
+
+```rust
+let price = 19.99;                       // f64, the default float
+let count = 3;                           // i32, the default integer
+let bytes = [0u8; 4];                    // four u8 values
+let id: u64 = 9_007_199_254_740_993;     // fits in a u64 and stays exact
+(2u64.pow(53) + 1) == 2u64.pow(53);      // false: u64 is exact up to 1.8 × 10¹⁹
+```
+</Compare>
+
+`f64` behaves exactly like a JS `number`: `0.1 + 0.2 != 0.3`, `1.0 / 0.0` is `inf` and `0.0 / 0.0` is `NaN`. Two differences catch JS developers. First, integers and floats are different types: `2` is an integer and `2.0` a float, so `let x: f64 = 2;` does not compile, and **integer** division by zero panics instead of producing `Infinity`. Second, because `NaN != NaN`, floats have no total order: a `Vec<f64>` cannot be sorted with plain `.sort()` (use `.sort_by(|a, b| a.total_cmp(b))`) and floats cannot be `HashMap` keys.
+
+### Which type should I use?
+
+- **No particular reason to choose**: `i32`. It is the default for integer literals and fast on every platform.
+- **Indexes, lengths, counts of things in memory**: `usize`. `Vec::len()` returns it and indexing requires it, so using it avoids conversions.
+- **Raw bytes, file contents, network data**: `u8`, usually as `&[u8]` or `Vec<u8>`.
+- **IDs, timestamps, file sizes, money in cents**: `i64` or `u64`. `Date.now()` already returns about 1.8 × 10¹², far beyond the 4.3 × 10⁹ of a `u32`.
+- **Fractional values**: `f64`, with the same caveats as in JS. Never use floats for money.
+- **Where you would reach for `bigint`**: `i128` or `u128` go up to about 10³⁸ with no allocation. For truly unbounded integers use a crate such as `num-bigint`.
+- **Signed or unsigned?** Unsigned types encode "cannot be negative" in the type, but subtraction becomes a trap: `a - b` with `b > a` overflows (see below). Prefer unsigned for sizes, bytes and bit masks, signed for quantities you compute differences of.
+
+`usize` and `isize` are as wide as a pointer on the target: 64 bits on a typical desktop or server, but 32 bits on `wasm32`, which matters if you compile Rust to WebAssembly for the browser.
+
+### Literals and conversions
+
+A literal gets its type from a suffix, from an annotation, or from how it is used; when nothing constrains it, it falls back to `i32` or `f64`.
+
+```rust
+let a = 42;                 // i32, nothing says otherwise
+let b = 42u8;               // the suffix picks the type
+let c: u64 = 42;            // ...or an annotation does
+let million = 1_000_000;    // underscores as separators, like JS
+let mask = 0xff_u8;         // hex, binary (0b1010) and octal (0o755) too
+let letter = b'A';          // byte literal: a u8 with value 65
+let x = 2.0;                // f64; plain `2` would be an integer
+```
 
 Conversions are always visible in the code:
 
@@ -100,6 +157,8 @@ let small: u8 = 200;
 let wide: u32 = small.into();          // lossless: From<u8> for u32 exists
 let checked = u8::try_from(300u32);    // fallible: Err(TryFromIntError)
 let truncated = 300u32 as u8;          // `as` keeps the low bits: 44
+let rounded = 3.99_f64 as i32;         // 3: float to int truncates toward zero
+let clamped = 1e10_f64 as i32;         // i32::MAX: and saturates at the bounds (NaN gives 0)
 let half = 7 / 2;                      // 3: integer division
 let ratio = 7 as f64 / 2.0;            // 3.5: you must convert first
 ```
@@ -110,11 +169,67 @@ let ratio = 7 as f64 / 2.0;            // 3.5: you must convert first
 
 ## Overflow is a decision you make
 
-What should `250u8 + 10` be? C says "undefined" for signed types and "wrap" for unsigned ones; Java always wraps; Python grows the integer forever. Rust's answer is: **you choose, explicitly**, and the default `+` is treated as a bug if it <Term id="overflow">overflows</Term>.
+Fixed-size types have a consequence that JavaScript's `number` hides: the result of an operation can be too large, or too small, to fit. `250u8 + 10` is 260, but a `u8` stops at 255. What should happen? C says <Term id="ub">undefined behaviour</Term> for signed types and "wrap" for unsigned ones; Java always wraps; Python and JS `bigint` grow the integer forever; JS `number` keeps going but silently loses precision past 2⁵³. Rust's answer is: **you choose, explicitly**, and the default `+` is treated as a bug if it <Term id="overflow">overflows</Term>.
+
+### What happens to the bits
+
+The CPU adds in binary and has exactly 8 bits to store a `u8` result:
+
+```text
+  250  =   1111_1010
++  10  =   0000_1010
+--------------------
+  260  = 1_0000_0100   needs 9 bits
+           0000_0100   the 9th bit is dropped: 4
+```
+
+Dropping the high bits that do not fit is the same as taking the result modulo 2⁸ = 256: 260 − 256 = 4. This is **wrapping**, like a car odometer rolling over from 999999 to 000000. It works in the other direction too: `0u8 - 1` wraps to 255.
+
+Signed types use <Term id="twos-complement">two's complement</Term>: the same 8 bits, but the top bit is worth −128 instead of +128. So `0111_1111` is 127, and adding one gives `1000_0000`, which reads as −128: the largest positive value wraps around to the most negative one. That is why `i8::MIN.abs()` has no valid answer, since +128 does not fit.
+
+JavaScript wraps in a few places too, just not where you would look: `(2 ** 31) | 0` is `-2147483648`, `new Uint8Array([260])[0]` is `4`, and `BigInt.asUintN(8, 260n)` is `4n`. `Uint8ClampedArray`, the type behind canvas pixel data, does the opposite and **saturates**: storing 260 gives 255. Rust lets you pick either behaviour, per operation.
 
 <IntegerExplorer />
 
-Try `i8` with `a = 127, b = 1`: the bit pattern `0111_1111` plus one becomes `1000_0000`, which in <Term id="twos-complement">two's complement</Term> reads as `-128`. Then try `u8` with `250 + 10`.
+Try `i8` with `a = 127, b = 1`, then `u8` with `250 + 10`, and compare the bit patterns.
+
+### Debug panics, release wraps
+
+For the plain operators `+`, `-` and `*`, the outcome depends on the build:
+
+- **Debug builds** (`cargo run`, `cargo test`): the compiler inserts a check after every operation and <Term id="panic">panics</Term> with `attempt to add with overflow`. Bugs surface during development, at the line that caused them.
+- **Release builds** (`cargo build --release`): the check is removed and the value wraps silently. This is defined behaviour in Rust, not undefined behaviour as in C, but it is almost never what you meant.
+
+<Callout type="runtime">
+Plain arithmetic compiles to a single CPU instruction in <Term id="profile">release builds</Term>; in debug builds each operation is followed by a branch on the CPU's overflow flag that calls the panic handler. The behaviour is controlled by the `overflow-checks` setting of the <Term id="cargo">Cargo</Term> profile, so you can keep the checks in production with `[profile.release] overflow-checks = true` at a small cost.
+</Callout>
+
+The overflow you will actually meet most often is not a huge multiplication but **unsigned subtraction going below zero**:
+
+<Playground title="The classic: len() - 1 on an empty slice">
+```rust
+fn last_index(items: &[i32]) -> usize {
+    items.len() - 1
+}
+
+fn main() {
+    println!("{}", last_index(&[10, 20, 30])); // 2
+    println!("{}", last_index(&[]));           // debug: panic; release: 18446744073709551615
+}
+```
+</Playground>
+
+In JavaScript, `[].length - 1` is `-1`, a value your code probably checks for. A `usize` cannot be −1: a debug build panics with `attempt to subtract with overflow`, while a release build produces `usize::MAX`, which fails much later (an index out of bounds, a loop that never ends) far from the real cause. Write what you mean instead: `items.len().checked_sub(1)` returns an `Option<usize>`, `items.last()` avoids the arithmetic entirely, and `a.abs_diff(b)` gives the distance between two unsigned values without caring which is larger.
+
+A few rules do not depend on the build at all:
+
+- When the values are known at compile time, overflow is a compile error: `let x: u8 = 256;` fails with `literal out of range for u8`, and `i32::MAX + 1` or `1u8 << 8` with `this arithmetic operation will overflow`.
+- Integer division by zero and `i32::MIN / -1` (whose result, +2³¹, does not fit) **always** panic, even in release builds.
+- `as` casts never panic: integer-to-integer casts keep the low bits, float-to-integer casts saturate.
+
+### Choosing a strategy
+
+When overflow is a real possibility rather than a bug, say so with one of four method families, available on every integer type:
 
 <Playground title="Four overflow strategies">
 ```rust
@@ -133,15 +248,13 @@ fn main() {
 ```
 </Playground>
 
-- `wrapping_*` for hashes, checksums and ring counters.
-- `checked_*` returns <Term id="option">`Option`</Term> when overflow means invalid input.
-- `saturating_*` for things like volume, progress or retry counters that should clamp.
-- `overflowing_*` when you need both the wrapped value and the carry flag.
+- `wrapping_*` for hashes, checksums and ring counters, where modulo arithmetic is the point.
+- `checked_*` returns <Term id="option">`Option`</Term>, `None` on overflow, when overflow means invalid input.
+- `saturating_*` clamps at `MIN` or `MAX`, for things like volume, progress or retry counters (the `Uint8ClampedArray` behaviour).
+- `overflowing_*` when you need both the wrapped value and a flag saying whether it wrapped.
 - `std::num::Wrapping<T>` and `Saturating<T>` wrap a type so that plain `+` follows that policy.
 
-<Callout type="runtime">
-Plain arithmetic compiles to a single CPU instruction in <Term id="profile">release builds</Term>. In debug builds the compiler adds an overflow check after each operation and calls the <Term id="panic">panic handler</Term> if it triggers. The behaviour is controlled by the `overflow-checks` setting of the <Term id="cargo">Cargo</Term> profile, so you can keep the checks in production with `[profile.release] overflow-checks = true` at a small cost.
-</Callout>
+Each family exists for every operation that can overflow: `_add`, `_sub`, `_mul`, `_div`, `_neg`, `_pow`, `_shl` and more.
 
 ## Tuples and arrays
 
@@ -200,11 +313,47 @@ fn main() {
 
 Try adding a semicolon after `x * x`: the function body now evaluates to `()`, and the compiler reports `mismatched types: expected i32, found ()`, pointing at the semicolon and suggesting you remove it. Loops are expressions too: `let found = loop { … break value; };` returns a value from a `loop`.
 
+## Building toward the project
+
+`ledger` records amounts of money, and this lesson decides how to store them. Floats are ruled out: `f64` cannot represent most decimal fractions exactly, and a ledger that drifts by a cent is a broken ledger. Instead, every amount is an **`i64` number of cents**: `12.50` is stored as `1250`, and the decimal point exists only when printing. Signed, because a refund is a negative expense; 64 bits, because the maximum is about 92 quadrillion.
+
+<Playground title="ledger: money as integer cents">
+```rust
+fn format_cents(cents: i64) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    let abs = cents.unsigned_abs(); // u64: unlike abs(), cannot overflow on i64::MIN
+    format!("{sign}{}.{:02}", abs / 100, abs % 100)
+}
+
+fn main() {
+    // Floats cannot represent most decimal fractions exactly
+    let float_total = 0.10 + 0.20;
+    println!("as f64:   {float_total}");
+
+    // Integer cents are exact; the decimal point exists only when printing
+    let lunch: i64 = 1250; // 12.50
+    let coffee: i64 = 820; // 8.20
+    let refund: i64 = -500; // -5.00: signed, because refunds are negative
+    let total = lunch + coffee + refund;
+    println!("as cents: {total} -> {}", format_cents(total));
+
+    // Parsing "12.50" multiplies by 100: checked, because the input comes from a user
+    let whole: i64 = 92_233_720_368_547_759;
+    println!("{:?}", whole.checked_mul(100)); // None: would overflow
+    println!("{}", format_cents(i64::MIN)); // abs() would panic here
+}
+```
+</Playground>
+
+`format_cents` is the exact function used in the final program: an `if` expression picks the sign, `unsigned_abs` avoids the `i64::MIN` overflow trap, integer division and remainder split euros from cents, and `{:02}` pads to two digits. The parser that turns `"12.50"` into `1250` uses `checked_mul` and `checked_add`, because its input comes from the user and a huge number must become an error, not a panic or a silently wrapped value.
+
 ## Key takeaways
 
 - `let` is immutable and deep; add `mut` only where state genuinely changes.
 - Shadowing creates a new binding, possibly of a new type: ideal for parse-and-refine steps.
-- Every integer type names its width; there are no implicit conversions. Use `into`, `try_from`, and `as` deliberately.
-- Overflow panics in debug and wraps in release; when it matters, pick `wrapping_`, `checked_`, `saturating_` or `overflowing_` explicitly.
+- JavaScript's `number` is Rust's `f64`; instead of `bigint`, Rust offers fixed-size integers from `i8` to `u128`, each naming its width and sign.
+- Default to `i32` for integers, `usize` for indexes and lengths, `u8` for bytes and `i64`/`u64` for IDs and timestamps.
+- There are no implicit conversions. Use `into`, `try_from`, and `as` deliberately.
+- Overflow panics in debug and wraps in release; watch unsigned subtraction in particular. When overflow is expected, pick `wrapping_`, `checked_`, `saturating_` or `overflowing_` explicitly.
 - Arrays and tuples are fixed-size and stack-friendly; indexing is always bounds-checked.
 - Blocks, `if`, `match` and `loop` are expressions; a trailing semicolon turns a value into `()`.

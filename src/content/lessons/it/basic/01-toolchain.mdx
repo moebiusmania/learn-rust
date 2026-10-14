@@ -210,6 +210,35 @@ fn main() {
 
 In una build di **<Term id="profile">debug</Term>** questo codice va in panic con *attempt to add with <Term id="overflow">overflow</Term>*. In modalità **release** il controllo viene rimosso e il valore torna a `0`. Se ti serve un comportamento preciso indipendentemente dal profilo, dichiaralo esplicitamente con `wrapping_add`, `checked_add` o `saturating_add`, che incontrerai nella prossima lezione.
 
+## Verso il progetto
+
+Questo percorso si chiude con un progetto: nell'ultima lezione costruisci **`ledger`**, un piccolo gestore di spese a riga di comando, da una cartella vuota fino a un binario installato. Da qui in avanti ogni lezione termina con una sezione come questa, che mostra quale pezzo di `ledger` fornisce.
+
+Questa lezione fornisce il progetto stesso. Crealo subito:
+
+```sh
+cargo new ledger
+cd ledger
+```
+
+Uno strumento a riga di comando parte leggendo i propri argomenti, che la libreria standard espone come `std::env::args()`. Sostituisci `src/main.rs` con:
+
+```rust
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    println!("{} arguments: {args:?}", args.len());
+}
+```
+
+Poi eseguilo, mettendo i tuoi argomenti dopo `--`, così Cargo li passa al programma invece di interpretarli lui:
+
+```sh
+$ cargo run -q -- add 12.50 food lunch
+5 arguments: ["target/debug/ledger", "add", "12.50", "food", "lunch"]
+```
+
+Il primo argomento è il percorso dell'eseguibile; l'input vero inizia all'indice 1. `Vec<String>` e `collect()` li vedrai nelle prossime lezioni; alla fine del percorso queste stringhe diventeranno comandi, importi e record.
+
 ## Punti chiave
 
 - `rustup` gestisce le toolchain, `cargo` pensa a tutto il resto: build, test, dipendenze, documentazione.

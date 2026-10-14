@@ -207,6 +207,39 @@ fn main() {
 
 Iterare per valore non è una trappola per le prestazioni: sposta fuori ogni `String` senza copiarne il buffer sullo heap, e alla fine libera il buffer del vettore. È la scelta giusta quando trasformi una collezione in un'altra e l'originale non ti serve più.
 
+## Verso il progetto
+
+Il comando `summary` di `ledger` è un problema di conteggio parole travestito: invece di contare parole, somma importi per categoria. Tutto quello che serve è in questa lezione: `lines()` e `splitn` per leggere il file dati, una `HashMap` con l'entry API per accumulare i totali, e `sort_by` per ordinare il risultato, dato che l'ordine di iterazione della mappa non è specificato.
+
+<Playground title="ledger: totali per categoria">
+```rust
+use std::collections::HashMap;
+
+fn main() {
+    // Il file dati di ledger: centesimi,categoria,nota (la nota può contenere virgole)
+    let file = "1250,food,lunch, with Ada\n4500,transport,monthly pass\n820,food,coffee beans\n";
+
+    let mut totals: HashMap<&str, i64> = HashMap::new();
+    for line in file.lines() {
+        let mut fields = line.splitn(3, ','); // al massimo 3 campi
+        let cents: i64 = fields.next().unwrap().parse().unwrap();
+        let category = fields.next().unwrap(); // &str preso in prestito da `file`
+        let note = fields.next().unwrap_or("");
+        println!("{cents:>6}  {category:<10} {note}");
+        *totals.entry(category).or_insert(0) += cents;
+    }
+
+    let mut rows: Vec<(&str, i64)> = totals.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0))); // prima i più grandi, poi per nome
+    println!("{rows:?}");
+}
+```
+</Playground>
+
+Nota il tipo delle chiavi: `HashMap<&str, i64>`. Le chiavi sono prestiti dal testo invece di essere copiate in nuove `String`. `splitn(3, ',')` si ferma dopo la seconda virgola, quindi una nota può contenere virgole proprie. Le chiamate a `unwrap()` vanno bene in un abbozzo; il programma finale le sostituisce con la gestione degli errori della lezione precedente, e segnala il numero di riga di una voce corrotta.
+
+Con questo la cassetta degli attrezzi è completa. La prossima lezione mette insieme tutti i pezzi.
+
 ## Punti chiave
 
 - `Vec<T>` è puntatore, lunghezza e capacità; crescendo raddoppia il buffer e sposta gli elementi, quindi `push` è O(1) ammortizzato.

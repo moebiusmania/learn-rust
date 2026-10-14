@@ -210,6 +210,35 @@ fn main() {
 
 In a **<Term id="profile">debug</Term>** build this panics with *attempt to add with <Term id="overflow">overflow</Term>*. In **release** mode the check is removed and the value wraps to `0`. If you need a specific behaviour regardless of the profile, say so explicitly with `wrapping_add`, `checked_add` or `saturating_add`, which you will meet in the next lesson.
 
+## Building toward the project
+
+This track ends with a project: in the last lesson you build **`ledger`**, a small command-line expense tracker, from an empty folder to an installed binary. From here on, every lesson closes with a section like this one, showing which piece of `ledger` it provides.
+
+This lesson provides the project itself. Create it now:
+
+```sh
+cargo new ledger
+cd ledger
+```
+
+A command-line tool starts by reading its arguments, which the standard library exposes as `std::env::args()`. Replace `src/main.rs` with:
+
+```rust
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    println!("{} arguments: {args:?}", args.len());
+}
+```
+
+Then run it, putting your arguments after `--` so that Cargo passes them to the program instead of interpreting them itself:
+
+```sh
+$ cargo run -q -- add 12.50 food lunch
+5 arguments: ["target/debug/ledger", "add", "12.50", "food", "lunch"]
+```
+
+The first argument is the path of the executable; the real input starts at index 1. `Vec<String>` and `collect()` are covered in the next lessons; by the end of the track, these strings will be turned into commands, amounts and records.
+
 ## Key takeaways
 
 - `rustup` manages toolchains, `cargo` drives everything else: build, test, dependencies, docs.

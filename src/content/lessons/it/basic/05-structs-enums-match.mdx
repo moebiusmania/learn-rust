@@ -314,6 +314,61 @@ fn main() {
 Java moderno (sealed interface + record + pattern matching nello `switch`) e C# (record + switch expression) stanno convergendo sulla stessa idea. La differenza è che in Rust questo è il modo *predefinito* di modellare i dati, la libreria standard è costruita su di esso (`Option`, <Term id="result">`Result`</Term>, `Ordering`, `Cow`) e gli enum sono valori sullo <Term id="stack">stack</Term>, senza allocazioni per variante.
 </Callout>
 
+## Verso il progetto
+
+`ledger` ha due tipi centrali, e questa lezione li fornisce entrambi. I dati sono una struct, `Expense`, con un metodo che la scrive come riga del file dati (`to_line(&self)`) e una funzione associata che la rilegge (`Expense::from_line(line)`). La riga di comando è un enum, con una variante per comando, ognuna con esattamente i dati che le servono.
+
+Il parsing degli argomenti è un `match` su uno **slice pattern**: ogni ramo descrive la forma esatta di una riga di comando valida, e `..` assorbe il resto. Una prima versione:
+
+<Playground title="ledger: i comandi come enum">
+```rust
+enum Command {
+    Add { amount: String, category: String },
+    List { category: Option<String> },
+    Summary,
+    Help,
+}
+
+fn parse_command(args: &[&str]) -> Option<Command> {
+    match args {
+        [] | ["help", ..] => Some(Command::Help),
+        ["add", amount, category, ..] => Some(Command::Add {
+            amount: amount.to_string(),
+            category: category.to_string(),
+        }),
+        ["list"] => Some(Command::List { category: None }),
+        ["list", category] => Some(Command::List {
+            category: Some(category.to_string()),
+        }),
+        ["summary"] => Some(Command::Summary),
+        _ => None,
+    }
+}
+
+fn main() {
+    let inputs: [&[&str]; 5] = [
+        &["add", "12.50", "food", "lunch"],
+        &["list", "food"],
+        &["summary"],
+        &["summary", "extra"],
+        &[],
+    ];
+    for args in inputs {
+        match parse_command(args) {
+            Some(Command::Add { amount, category }) => println!("add {amount} to {category}"),
+            Some(Command::List { category: Some(c) }) => println!("list only {c}"),
+            Some(Command::List { category: None }) => println!("list everything"),
+            Some(Command::Summary) => println!("show the summary"),
+            Some(Command::Help) => println!("print the help"),
+            None => println!("unrecognized: {args:?}"),
+        }
+    }
+}
+```
+</Playground>
+
+Confrontalo con una catena di controlli `if args[0] == "add" && args.len() >= 3`: i pattern non possono indicizzare fuori dai limiti, e `["summary", "extra"]` semplicemente non corrisponde a nessun ramo. Dato che `main` fa match su ogni variante, aggiungere un comando in futuro porta il compilatore a indicare ogni punto che deve gestirlo. La versione finale valida l'importo e costruisce una `Expense` completa direttamente dentro `Command::Add`.
+
 ## Punti chiave
 
 - Dati (`struct`, `enum`) e comportamento (`impl`) si dichiarano separatamente; non ci sono classi, costruttori né ereditarietà.

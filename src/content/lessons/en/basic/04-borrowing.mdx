@@ -187,6 +187,31 @@ fn main() {
 
 Because `word` borrows from `sentence`, calling `sentence.clear()` *while `word` is still in use* would be rejected: a slice can never observe its source being truncated underneath it. Try moving the first `println!` below `clear()` to see the error. String slicing works on **byte** offsets and <Term id="panic">panics</Term> if you cut in the middle of a multi-byte <Term id="utf-8">UTF-8</Term> character, so prefer methods like `find`, `split` and `char_indices` over hand-computed indices.
 
+## Building toward the project
+
+Most functions in `ledger` only need to *look at* data, and their signatures say so. These are the real signatures from the final program:
+
+```rust
+fn load(path: &str) -> Result<Vec<Expense>, LedgerError>
+fn append(path: &str, expense: &Expense) -> Result<(), LedgerError>
+fn print_list(expenses: &[Expense], category: Option<&str>)
+fn totals_by_category(expenses: &[Expense]) -> Option<Vec<(&str, i64)>>
+```
+
+- `load` borrows the path and returns **owned** data: the caller gets a `Vec` it can keep.
+- `append` borrows the expense it writes, so the caller can still print it afterwards.
+- The reports take `&[Expense]`, a slice, not `&Vec<Expense>`: they read everything and own nothing.
+- `totals_by_category` returns `&str` category names that point **into** `expenses`, so no name is copied. The borrow checker ties the result to the input: the expenses cannot be dropped or modified while the totals are still in use.
+
+The same idea solves a small problem in `main`. `std::env::args()` produces owned `String`s, but matching against string literals works on `&str`. A second, shadowed `Vec` borrows from the first:
+
+```rust
+let args: Vec<String> = std::env::args().skip(1).collect();
+let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect(); // borrows the Strings above
+```
+
+Shadowing hides the first `args` but does not drop it, so the `String`s stay alive until the end of `main` and every borrow remains valid.
+
 ## Key takeaways
 
 - `&T` borrows for reading, `&mut T` borrows exclusively for writing; the owner keeps the value.

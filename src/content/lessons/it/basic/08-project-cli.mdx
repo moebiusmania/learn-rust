@@ -1,0 +1,936 @@
+---
+title: "Progetto: un registro delle spese da riga di comando"
+description: Mettiamo insieme tutto il percorso costruendo ledger, una CLI piccola ma completa che registra le spese in un file e stampa report per categoria, usando solo la libreria standard.
+duration: 45
+tags: [progetto, cli, std::env, std::fs, test]
+---
+
+È il momento di costruire qualcosa di vero. In questa lezione scrivi **`ledger`**, un registro delle spese da riga di comando: salva le spese in un file di testo semplice e le mostra come elenco o come totali per categoria. Sono circa 250 righe, usa **solo la libreria standard** e ogni sua parte è qualcosa che hai già incontrato nelle lezioni precedenti. Le sezioni "Verso il progetto" alla fine di ogni lezione hanno anticipato questi pezzi uno alla volta; qui si incastrano.
+
+Di proposito non ci sono <Term id="crate">crate</Term> di terze parti: lo scopo è vedere cosa fa ogni riga. L'ultima sezione elenca i crate a cui ti rivolgeresti per uno strumento in produzione.
+
+## Cosa stiamo costruendo
+
+```sh
+$ ledger add 12.50 food lunch with Ada
+added 12.50 to food
+$ ledger add 45 transport monthly pass
+added 45.00 to transport
+$ ledger add 8.2 food coffee beans
+added 8.20 to food
+$ ledger list food
+     12.50  food         lunch with Ada
+      8.20  food         coffee beans
+$ ledger summary
+transport         45.00   68.5%
+food              20.70   31.5%
+total             65.70
+$ ledger add 12,50 food
+error: invalid amount "12,50", expected something like 12.50
+```
+
+Ogni parte del programma corrisponde a una lezione di questo percorso:
+
+| Parte | Cosa fa | Si basa su |
+| --- | --- | --- |
+| Setup del progetto | `cargo new`, `cargo run`, `cargo test` | Toolchain e Cargo |
+| Importi | Importi come centesimi `i64`, parsing con aritmetica controllata | Variabili e tipi |
+| Modello dei dati | Ogni `Expense` possiede le sue stringhe; il buffer del file viene rilasciato | Ownership |
+| Report | Le funzioni prendono in prestito `&[Expense]`; i totali prendono in prestito i nomi delle categorie | Borrowing |
+| Comandi | Un `enum Command` ricavato con i pattern sulle slice | Struct, enum e match |
+| Errori | Un enum `LedgerError`, `?` e `From` | Gestione degli errori |
+| Riepilogo | `HashMap` con la entry API, ordinamento di un `Vec` | Collezioni e stringhe |
+
+## Passo 1: il progetto
+
+```sh
+cargo new ledger
+cd ledger
+```
+
+Tutto va in `src/main.rs`. Per queste dimensioni basta un file; dividere un programma in <Term id="module">moduli</Term> è argomento del percorso intermedio. Il file conterrà, nell'ordine: le funzioni per gli importi, il modello dei dati, il parser dei comandi, il tipo di errore, l'archiviazione, i report e infine `run` e `main`. Comincia dagli import e da due costanti:
+
+```rust
+use std::collections::HashMap;
+use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::process::ExitCode;
+
+const DEFAULT_FILE: &str = "ledger.csv";
+
+const USAGE: &str = "\
+usage:
+  ledger add <amount> <category> [note...]   record an expense, e.g. 12.50 food lunch
+  ledger list [category]                    show expenses, optionally for one category
+  ledger summary                            show totals per category
+
+Expenses are stored in ./ledger.csv, or in the file named by $LEDGER_FILE.
+";
+```
+
+`use std::fs::{self, OpenOptions}` importa sia il modulo `fs` (così possiamo scrivere `fs::read_to_string`) sia il tipo `OpenOptions`. Il backslash subito dopo le virgolette di apertura di `USAGE` salta il primo a capo, quindi il testo inizia con `usage:`.
+
+## Passo 2: gli importi come centesimi interi
+
+La lezione sulle variabili ha dato la regola: mai usare i float per il denaro. `0.1 + 0.2` non fa `0.3` in `f64` più di quanto lo faccia in JavaScript, e un registro che sballa di un centesimo è un registro rotto. Memorizziamo ogni importo come **numero di centesimi `i64`**: `12.50` diventa `1250`. Con segno, perché un rimborso è una spesa negativa, e a 64 bit, perché il più grande `i64` vale circa 92 milioni di miliardi di euro, che bastano.
+
+Due funzioni convertono tra testo e centesimi. Il parsing restituisce <Term id="option">`Option<i64>`</Term>: `None` significa "questo non è un importo valido", e il chiamante decide quale messaggio di errore mostrare.
+
+<Playground title="Passo 2: parsing e formattazione degli importi">
+```rust
+/// Converte "12", "12.5", "12.50" o "-3.20" in centesimi; None se il testo non è un importo.
+fn parse_amount(text: &str) -> Option<i64> {
+    let (sign, digits) = match text.strip_prefix('-') {
+        Some(rest) => (-1, rest),
+        None => (1, text),
+    };
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    let all_digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if whole.is_empty() || !all_digits(whole) || !all_digits(fraction) || fraction.len() > 2 {
+        return None;
+    }
+
+    // Restano solo cifre ASCII: ora parse() può fallire solo se il numero è troppo grande.
+    let whole: i64 = whole.parse().ok()?;
+    let fraction: i64 = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<i64>().ok()? * 10, // "12.5" significa 50 centesimi
+        _ => fraction.parse().ok()?,
+    };
+    let cents = whole.checked_mul(100)?.checked_add(fraction)?;
+    Some(sign * cents)
+}
+
+fn format_cents(cents: i64) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    let abs = cents.unsigned_abs(); // u64: a differenza di abs(), non va in overflow su i64::MIN
+    format!("{sign}{}.{:02}", abs / 100, abs % 100)
+}
+
+fn main() {
+    for input in ["12", "12.5", "0.07", "-3.20", "12,50", "1.234", "--5", "99999999999999999"] {
+        match parse_amount(input) {
+            Some(cents) => println!("{input:>18} -> {cents} cents -> {}", format_cents(cents)),
+            None => println!("{input:>18} -> not an amount"),
+        }
+    }
+    println!("{}", format_cents(i64::MIN));
+}
+```
+</Playground>
+
+Qui si incontrano diverse idee del percorso:
+
+- **<Term id="shadowing">Shadowing</Term>** per il parsing in più fasi: `whole` e `fraction` nascono come slice `&str` dell'input e vengono oscurate dai loro valori `i64`.
+- **Aritmetica controllata**: `99999999999999999` contiene solo cifre, ma moltiplicato per 100 non sta in un `i64`. `checked_mul` restituisce `None` invece di andare in panic in debug o di fare wrapping in release, e <Term id="question-mark">`?`</Term> su un `Option` fa uscire quel `None` dalla funzione.
+- **Validiamo prima del parsing**: `str::parse::<i64>()` accetterebbe tranquillamente `"+5"`, e `"--5"` diventerebbe `-5` dopo aver tolto un segno. Controllare che restino solo cifre ASCII rende il formato accettato esattamente quello promesso dal testo di aiuto.
+- **`unsigned_abs`**: `i64::MIN.abs()` va in overflow, per lo stesso motivo per cui `-128i8` non ha una controparte positiva. `unsigned_abs` restituisce un `u64`, che ci sta sempre.
+- **Divisione intera e resto**: `abs / 100` dà gli euro, `abs % 100` i centesimi, e `{:02}` li completa a due cifre.
+
+## Passo 3: il modello dei dati
+
+Una spesa è una <Term id="struct">struct</Term> che **possiede** i propri dati. Nel file è memorizzata come una riga, `cents,category,note`:
+
+```text
+1250,food,lunch with Ada
+4500,transport,monthly pass
+820,food,coffee beans
+```
+
+<Playground title="Passo 3: un Expense e il suo formato di riga">
+```rust
+#[derive(Debug, PartialEq)]
+struct Expense {
+    cents: i64,
+    category: String,
+    note: String,
+}
+
+impl Expense {
+    /// Una riga del file dati: `cents,category,note`.
+    fn to_line(&self) -> String {
+        format!("{},{},{}", self.cents, self.category, self.note)
+    }
+
+    fn from_line(line: &str) -> Result<Expense, String> {
+        let mut fields = line.splitn(3, ','); // la nota stessa può contenere virgole
+        let (Some(cents), Some(category)) = (fields.next(), fields.next()) else {
+            return Err("expected `cents,category,note`".to_string());
+        };
+        let cents: i64 = cents
+            .parse()
+            .map_err(|e| format!("bad amount {cents:?}: {e}"))?;
+        let note = fields.next().unwrap_or("");
+        Ok(Expense {
+            cents,
+            category: category.to_string(),
+            note: note.to_string(),
+        })
+    }
+}
+
+fn main() {
+    let lunch = Expense {
+        cents: 1250,
+        category: "food".to_string(),
+        note: "lunch, with Ada".to_string(),
+    };
+    let line = lunch.to_line();
+    println!("{line}");
+    println!("round trip ok: {}", Expense::from_line(&line) == Ok(lunch));
+
+    for bad in ["oops", "12.50,food,decimal point", ""] {
+        println!("{bad:?} -> {:?}", Expense::from_line(bad));
+    }
+}
+```
+</Playground>
+
+Guarda i <Term id="receiver">receiver</Term> e i parametri, perché sono scelte di progetto:
+
+- `to_line(&self)` legge soltanto la spesa, quindi la prende in prestito. Restituisce una nuova `String` posseduta.
+- `from_line(line: &str)` prende in prestito la riga. I campi che trova sono slice `&str` *dentro quella riga*, e `category.to_string()` li copia in nuove `String` possedute dall'`Expense`. È questa copia a permettere al programma di rilasciare l'intero contenuto del file dopo il caricamento (passo 6) mentre le spese continuano a vivere.
+- `splitn(3, ',')` divide al massimo due volte, quindi le virgole dentro la nota sopravvivono. Una categoria con una virgola romperebbe il formato, perciò il parser dei comandi la rifiuta (passo 4).
+- `let (Some(cents), Some(category)) = … else { … }` è un <Term id="let-else">`let else`</Term> su una tupla: entrambi i campi devono essere presenti, altrimenti si esce subito.
+- Per ora il tipo di errore è una semplice `String`: `from_line` non sa quale riga del file sta analizzando, quindi sarà il chiamante ad arricchire il messaggio con il numero di riga.
+
+## Passo 4: i comandi come enum
+
+Il programma riceve gli argomenti come stringhe, ma il resto del codice non dovrebbe avere a che fare con stringhe. Li analizziamo una volta sola trasformandoli in un <Term id="enum">enum</Term> in cui ogni <Term id="variant">variante</Term> porta esattamente i dati che servono a quel comando. `Add` porta un `Expense` completo e validato, pronto per essere salvato:
+
+```rust
+#[derive(Debug, PartialEq)]
+enum Command {
+    Add(Expense),
+    List { category: Option<String> },
+    Summary,
+    Help,
+}
+```
+
+`std::env::args()` restituisce gli argomenti come <Term id="iterator">iteratore</Term> di `String`, il primo dei quali è il nome del programma. Per analizzarli vorremmo fare <Term id="match">match</Term> su letterali stringa, il che funziona su `&str` ma non su `String`, quindi `main` li converte con un binding oscurato:
+
+```rust
+let args: Vec<String> = std::env::args().skip(1).collect();
+let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect(); // prende in prestito le String qui sopra
+```
+
+Il secondo `args` prende in prestito dal primo. Lo shadowing nasconde un nome ma non rilascia il valore, quindi il `Vec<String>` resta vivo fino alla fine di `main` e i prestiti restano validi. Ora i **pattern sulle slice** trasformano il parser in una tabella:
+
+<Playground title="Passo 4: analizzare gli argomenti con i pattern sulle slice">
+```rust
+#[derive(Debug, PartialEq)]
+struct Expense {
+    cents: i64,
+    category: String,
+    note: String,
+}
+
+#[derive(Debug, PartialEq)]
+enum Command {
+    Add(Expense),
+    List { category: Option<String> },
+    Summary,
+    Help,
+}
+
+// Semplificata per questo passo: solo importi interi. La versione completa è nel passo 2.
+fn parse_amount(text: &str) -> Option<i64> {
+    text.parse::<i64>().ok()?.checked_mul(100)
+}
+
+fn parse_command(args: &[&str]) -> Result<Command, String> {
+    match args {
+        [] | ["help" | "-h" | "--help", ..] => Ok(Command::Help),
+        ["add", amount, category, note @ ..] => {
+            let Some(cents) = parse_amount(amount) else {
+                return Err(format!(
+                    "invalid amount {amount:?}, expected something like 12.50"
+                ));
+            };
+            if category.contains(',') {
+                return Err(format!("category {category:?} cannot contain a comma"));
+            }
+            Ok(Command::Add(Expense {
+                cents,
+                category: category.to_lowercase(),
+                note: note.join(" "),
+            }))
+        }
+        ["list"] => Ok(Command::List { category: None }),
+        ["list", category] => Ok(Command::List {
+            category: Some(category.to_lowercase()),
+        }),
+        ["summary"] => Ok(Command::Summary),
+        _ => Err(format!("unrecognized arguments: {}", args.join(" "))),
+    }
+}
+
+fn main() {
+    let examples: [&[&str]; 6] = [
+        &["add", "12", "Food", "lunch", "with", "Ada"],
+        &["list"],
+        &["list", "food"],
+        &["summary", "extra"],
+        &["add", "twelve", "food"],
+        &[],
+    ];
+    for args in examples {
+        println!("{args:?}\n  -> {:?}", parse_command(args));
+    }
+}
+```
+</Playground>
+
+Ogni <Term id="match-arm">ramo</Term> descrive la forma esatta di una riga di comando valida:
+
+- `["add", amount, category, note @ ..]` corrisponde a una slice il cui primo elemento è `"add"` e che ha almeno tre elementi, lega i due successivi e raccoglie il resto in `note`, a sua volta un `&[&str]` che `join(" ")` ritrasforma in un'unica stringa. Così `ledger add 8.2 food coffee beans` non ha bisogno di virgolette.
+- `["help" | "-h" | "--help", ..]` è un or-pattern sul primo elemento; `..` ignora qualunque cosa segua.
+- `["list"]` e `["list", category]` hanno lunghezze diverse, quindi sono rami diversi. `["summary", "extra"]` non corrisponde né a `["summary"]` né ad altro e finisce nel ramo <Term id="wildcard">jolly</Term>.
+
+Confrontalo con una catena di controlli `if args[0] == "add" && args.len() >= 3`: i pattern non possono accedere fuori dai limiti, e il compilatore verifica che ogni input possibile arrivi a un ramo. Nota anche che `parse_command` riceve `&[&str]` invece di leggere `std::env::args()` da sola. È questo che permette al playground qui sopra di passarle argomenti finti, ed è questo che ci permetterà di testarla.
+
+## Passo 5: un solo tipo di errore per il programma
+
+Diverse cose possono andare storte, e non sono lo stesso tipo di problema: l'utente ha scritto qualcosa di sbagliato, il file dati ha una riga rovinata, un totale è andato in overflow, oppure il sistema operativo si è rifiutato di aprire un file. Seguendo la lezione sulla gestione degli errori, diamo al programma un unico enum con una variante per ogni modalità di fallimento:
+
+```rust
+#[derive(Debug)]
+enum LedgerError {
+    Usage(String),
+    Corrupt { line: usize, reason: String },
+    Overflow,
+    Io(io::Error),
+}
+
+impl fmt::Display for LedgerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LedgerError::Usage(msg) => write!(f, "{msg}"),
+            LedgerError::Corrupt { line, reason } => write!(f, "data file, line {line}: {reason}"),
+            LedgerError::Overflow => write!(f, "total too large to represent"),
+            LedgerError::Io(e) => write!(f, "cannot access the data file: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for LedgerError {}
+
+impl From<io::Error> for LedgerError {
+    fn from(e: io::Error) -> Self {
+        LedgerError::Io(e)
+    }
+}
+```
+
+L'implementazione `From<io::Error>` è ciò che ci permette di scrivere `?` dopo qualsiasi operazione sui file in una funzione che restituisce `Result<_, LedgerError>`. Gli altri errori di basso livello vengono convertiti esplicitamente, dove sappiamo abbastanza da renderli utili: `parse_command(args).map_err(LedgerError::Usage)` incapsula il messaggio del parser (una variante di enum con un solo campo si può usare come funzione), e il caricamento aggiunge il numero di riga al messaggio di `from_line`.
+
+Perché non `Box<dyn Error>`? Funzionerebbe, ma `main` vuole trattare gli errori di utilizzo in modo diverso (stampando dopo di essi il testo di aiuto), e con un enum questo è un pattern match invece di un'ispezione di stringhe.
+
+## Passo 6: leggere e scrivere il file
+
+<Term id="std">`std::fs`</Term> e `std::io` coprono ciò che ci serve: leggere un intero file in una `String` e aggiungere una riga in fondo a un file.
+
+```rust
+fn load(path: &str) -> Result<Vec<Expense>, LedgerError> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut expenses = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let expense = Expense::from_line(line).map_err(|reason| LedgerError::Corrupt {
+            line: index + 1,
+            reason,
+        })?;
+        expenses.push(expense);
+    }
+    Ok(expenses)
+} // qui `text` viene rilasciato: ogni Expense possiede copie delle sue stringhe
+
+fn append(path: &str, expense: &Expense) -> Result<(), LedgerError> {
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{}", expense.to_line())?;
+    Ok(())
+} // qui `file` viene rilasciato, e questo lo chiude
+```
+
+Cose da notare:
+
+- **Un file mancante non è un errore**: prima del primo `add` semplicemente non è ancora stato registrato nulla. La <Term id="guard">guardia</Term> `if e.kind() == io::ErrorKind::NotFound` isola quel singolo caso; qualsiasi altro errore di I/O (permessi, una cartella al posto di un file) viene convertito con `e.into()`, che usa la nostra implementazione di `From`.
+- **L'ownership decide l'uso della memoria**: `text` possiede l'intero file. Ogni `line` è un `&str` preso in prestito da lì, e ogni `Expense` copia ciò che le serve nelle proprie `String`. Quando `load` termina, `text` viene <Term id="drop">rilasciato</Term> e il suo buffer liberato; le spese vengono spostate al chiamante dentro il `Vec`.
+- **`append` prende in prestito la spesa**: deve solo leggerla, quindi il chiamante ne mantiene l'ownership e può ancora stamparla dopo.
+- **La chiusura è <Term id="raii">RAII</Term>**: non esiste `file.close()`. Il `File` viene rilasciato alla fine di `append`, sia nel percorso di successo sia in ogni uscita anticipata di `?`, e il suo distruttore chiude il descrittore.
+- **`use std::io::Write`**: `writeln!` chiama il metodo `write_fmt` del <Term id="trait">trait</Term> `Write`, e i metodi di un trait si possono chiamare solo quando il trait è nello scope. Togli l'import e il compilatore ti dice esattamente quale `use` aggiungere.
+
+Aprire con `append(true)` significa che ogni `add` scrive una riga in fondo al file senza leggere né riscrivere il resto: costa poco, e un'esecuzione interrotta non può corrompere le righe precedenti.
+
+## Passo 7: i report
+
+I due report leggono soltanto le spese, quindi ricevono una <Term id="slice">slice</Term>, `&[Expense]`, e non ne prendono mai l'ownership:
+
+```rust
+fn print_list(expenses: &[Expense], category: Option<&str>) {
+    let mut shown = 0;
+    for e in expenses {
+        if category.is_some_and(|c| c != e.category) {
+            continue;
+        }
+        let amount = format_cents(e.cents);
+        println!("{amount:>10}  {:<12} {}", e.category, e.note);
+        shown += 1;
+    }
+    if shown == 0 {
+        println!("no expenses found");
+    }
+}
+```
+
+`category.is_some_and(…)` è vero solo quando è stato dato un filtro *e* questa spesa non vi corrisponde. L'impaginazione della tabella la fa la formattazione: `{:>10}` allinea a destra l'importo su 10 colonne, `{:<12}` allinea a sinistra la categoria su 12.
+
+Il riepilogo raggruppa per categoria, un lavoro da <Term id="hashmap">`HashMap`</Term>:
+
+<Playground title="Passo 7: totali per categoria">
+```rust
+use std::collections::HashMap;
+
+struct Expense {
+    cents: i64,
+    category: String,
+}
+
+/// Totale per categoria, dal più grande. None se un totale non sta in un i64.
+fn totals_by_category(expenses: &[Expense]) -> Option<Vec<(&str, i64)>> {
+    let mut totals: HashMap<&str, i64> = HashMap::new();
+    for e in expenses {
+        let total = totals.entry(e.category.as_str()).or_insert(0);
+        *total = total.checked_add(e.cents)?;
+    }
+    let mut rows: Vec<(&str, i64)> = totals.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0))); // prima il più grande, poi per nome
+    Some(rows)
+}
+
+fn main() {
+    let expenses = vec![
+        Expense { cents: 1250, category: "food".to_string() },
+        Expense { cents: 4500, category: "transport".to_string() },
+        Expense { cents: 820, category: "food".to_string() },
+        Expense { cents: -500, category: "food".to_string() },
+    ];
+    let rows = totals_by_category(&expenses).expect("no overflow with these values");
+    for (category, cents) in &rows {
+        println!("{category:<12} {cents:>8}");
+    }
+
+    let huge = vec![
+        Expense { cents: i64::MAX, category: "yacht".to_string() },
+        Expense { cents: 1, category: "yacht".to_string() },
+    ];
+    println!("overflow: {:?}", totals_by_category(&huge));
+}
+```
+</Playground>
+
+La parte interessante è il tipo `HashMap<&str, i64>`. Le chiavi sono **prese in prestito** dai campi `category` delle spese: nessun nome di categoria viene copiato, per quante spese ci siano. Il compilatore collega il `Vec<(&str, i64)>` restituito al parametro `expenses` (con un solo parametro riferimento, i riferimenti restituiti possono venire solo da lì), quindi un chiamante non può rilasciare le spese mentre tiene ancora le righe. La <Term id="entry-api">entry API</Term> trova o inserisce ogni chiave con un'unica ricerca, e `checked_add` con `?` trasforma un totale in overflow in `None` invece che in un panic o in un numero silenziosamente sbagliato.
+
+L'ordine di iterazione di `HashMap` non è specificato, quindi le righe vengono ordinate prima di essere restituite: per totale decrescente, poi per nome, per rendere deterministici i pareggi. `print_summary` aggiunge un totale complessivo e la quota di ogni categoria:
+
+```rust
+fn print_summary(expenses: &[Expense]) -> Result<(), LedgerError> {
+    let rows = totals_by_category(expenses).ok_or(LedgerError::Overflow)?;
+    let mut grand_total: i64 = 0;
+    for (_, cents) in &rows {
+        grand_total = grand_total
+            .checked_add(*cents)
+            .ok_or(LedgerError::Overflow)?;
+    }
+    for (category, cents) in &rows {
+        let share = if grand_total == 0 {
+            0.0
+        } else {
+            *cents as f64 / grand_total as f64 * 100.0
+        };
+        println!("{category:<12} {:>10} {share:>6.1}%", format_cents(*cents));
+    }
+    println!("{:<12} {:>10}", "total", format_cents(grand_total));
+    Ok(())
+}
+```
+
+`ok_or` converte l'`Option` in un `Result` con il nostro errore, così `?` può propagarlo. La percentuale è l'unico punto in cui i float sono appropriati: serve solo per la visualizzazione, e un errore di arrotondamento alla quarta cifra decimale non cambia alcun valore memorizzato. L'<Term id="expression">espressione</Term> `if` evita la divisione per zero quando ogni spesa è stata compensata da rimborsi.
+
+## Passo 8: collegare i pezzi
+
+Non resta che collegare i pezzi. `run` contiene la logica del programma e restituisce un `Result`; `main` decide come mostrare gli errori all'utente e quale sia il codice di uscita:
+
+```rust
+fn run(args: &[&str]) -> Result<(), LedgerError> {
+    let path = std::env::var("LEDGER_FILE").unwrap_or_else(|_| DEFAULT_FILE.to_string());
+
+    match parse_command(args).map_err(LedgerError::Usage)? {
+        Command::Help => print!("{USAGE}"),
+        Command::Add(expense) => {
+            append(&path, &expense)?;
+            let amount = format_cents(expense.cents);
+            println!("added {amount} to {}", expense.category);
+        }
+        Command::List { category } => print_list(&load(&path)?, category.as_deref()),
+        Command::Summary => print_summary(&load(&path)?)?,
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect(); // prende in prestito le String qui sopra
+
+    match run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            if let LedgerError::Usage(_) = e {
+                eprint!("\n{USAGE}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+```
+
+- **Il `match` su `Command` è esaustivo.** Aggiungi più avanti una variante `Command::Remove` e questa funzione smette di compilare finché non la gestisci.
+- **`Command::Add(expense)` sposta** l'`Expense` fuori dal comando in un binding locale: le sue stringhe sono state allocate una sola volta, da `parse_command`, e non vengono mai copiate. Poi `append` prende solo in prestito la spesa, quindi possiamo ancora stamparla.
+- **`category.as_deref()`** trasforma un `Option<String>` in un `Option<&str>`, prendendo in prestito la stringa contenuta, che è ciò che chiede `print_list`.
+- **`&load(&path)?`**: il `Vec` caricato è un temporaneo che vive fino alla fine dell'istruzione, abbastanza a lungo perché il report possa prenderlo in prestito.
+- **`std::env::var`** legge una variabile d'ambiente e restituisce un `Result`, perché la variabile può mancare; `unwrap_or_else` ripiega sul nome di file predefinito.
+- **Gli errori vanno su stderr** con `eprintln!`, e `main` restituisce un `ExitCode` invece di un `Result`. Anche restituire `Result` da `main` funzionerebbe, ma stamperebbe la forma `Debug` dell'errore (`Usage("…")`), pensata per gli sviluppatori, non per gli utenti. Il codice di uscita 1 permette agli script di shell di rilevare il fallimento: `ledger add 12,50 food && echo saved` non stampa nulla.
+
+## Passo 9: eseguirlo
+
+Gli argomenti dopo `--` vengono passati al tuo programma invece che a Cargo:
+
+```sh
+$ cargo run -- add 12.50 food lunch with Ada
+   Compiling ledger v0.1.0 (/home/you/ledger)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running `target/debug/ledger add 12.50 food lunch with Ada`
+added 12.50 to food
+$ cargo run -q -- add 45 Transport monthly pass
+added 45.00 to transport
+$ cargo run -q -- summary
+transport         45.00   78.3%
+food              12.50   21.7%
+total             57.50
+$ cat ledger.csv
+1250,food,lunch with Ada
+4500,transport,monthly pass
+```
+
+`-q` nasconde i messaggi di avanzamento di Cargo. Prova anche i percorsi di errore: un importo come `12,50`, un comando sconosciuto, oppure una riga senza senso aggiunta a mano in `ledger.csv`, che `list` e `summary` segnalano con il suo numero di riga.
+
+Quando sei soddisfatto, compila un binario ottimizzato e installalo:
+
+```sh
+cargo build --release          # target/release/ledger, qualche centinaio di KB
+cargo install --path .         # compila in release e copia in ~/.cargo/bin (nel tuo PATH)
+ledger summary
+```
+
+Il binario di release è autosufficiente: copialo su un'altra macchina con lo stesso sistema operativo e la stessa architettura e funziona, senza installare Rust e senza nient'altro da distribuire.
+
+## Passo 10: i test
+
+Le funzioni pure come `parse_amount` e `from_line` sono facili da testare perché ricevono valori e restituiscono valori. Il framework di test di Rust è integrato: aggiungi questo in fondo a `main.rs`.
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_amounts() {
+        assert_eq!(parse_amount("12"), Some(1200));
+        assert_eq!(parse_amount("12.5"), Some(1250));
+        assert_eq!(parse_amount("0.07"), Some(7));
+        assert_eq!(parse_amount("-3.20"), Some(-320));
+        for bad in [
+            "",
+            "12,50",
+            "1.234",
+            "abc",
+            "--5",
+            "+5",
+            "99999999999999999999",
+        ] {
+            assert_eq!(parse_amount(bad), None, "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn formats_cents() {
+        assert_eq!(format_cents(1250), "12.50");
+        assert_eq!(format_cents(-7), "-0.07");
+        assert_eq!(format_cents(i64::MIN), "-92233720368547758.08");
+    }
+
+    #[test]
+    fn lines_round_trip() {
+        let e = Expense {
+            cents: 1250,
+            category: "food".into(),
+            note: "lunch, with Ada".into(),
+        };
+        assert_eq!(Expense::from_line(&e.to_line()), Ok(e));
+    }
+}
+```
+
+```sh
+$ cargo test
+running 3 tests
+test tests::formats_cents ... ok
+test tests::lines_round_trip ... ok
+test tests::parses_amounts ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+`#[cfg(test)]` è un <Term id="attribute">attributo</Term> che compila il modulo solo per `cargo test`, quindi i test non aggiungono nulla al binario di release. `mod tests` dichiara un modulo annidato e `use super::*` importa tutto dal modulo padre, comprese le funzioni private: in Rust gli unit test vivono accanto al codice e possono testarne i dettagli interni. L'ultimo test è il motivo per cui `Expense` deriva `PartialEq`: `assert_eq!` deve confrontare i valori, e stamparli con `Debug` quando differiscono.
+
+## Il programma completo
+
+Ecco l'intero `src/main.rs`, esattamente come costruito nei passi precedenti (formattato con `cargo fmt`):
+
+```rust
+use std::collections::HashMap;
+use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::process::ExitCode;
+
+const DEFAULT_FILE: &str = "ledger.csv";
+
+const USAGE: &str = "\
+usage:
+  ledger add <amount> <category> [note...]   record an expense, e.g. 12.50 food lunch
+  ledger list [category]                    show expenses, optionally for one category
+  ledger summary                            show totals per category
+
+Expenses are stored in ./ledger.csv, or in the file named by $LEDGER_FILE.
+";
+
+// ---------- importi ----------
+
+/// Converte "12", "12.5", "12.50" o "-3.20" in centesimi; None se il testo non è un importo.
+fn parse_amount(text: &str) -> Option<i64> {
+    let (sign, digits) = match text.strip_prefix('-') {
+        Some(rest) => (-1, rest),
+        None => (1, text),
+    };
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    let all_digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if whole.is_empty() || !all_digits(whole) || !all_digits(fraction) || fraction.len() > 2 {
+        return None;
+    }
+
+    // Restano solo cifre ASCII: ora parse() può fallire solo se il numero è troppo grande.
+    let whole: i64 = whole.parse().ok()?;
+    let fraction: i64 = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<i64>().ok()? * 10, // "12.5" significa 50 centesimi
+        _ => fraction.parse().ok()?,
+    };
+    let cents = whole.checked_mul(100)?.checked_add(fraction)?;
+    Some(sign * cents)
+}
+
+fn format_cents(cents: i64) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    let abs = cents.unsigned_abs(); // u64: a differenza di abs(), non va in overflow su i64::MIN
+    format!("{sign}{}.{:02}", abs / 100, abs % 100)
+}
+
+// ---------- modello dei dati ----------
+
+#[derive(Debug, PartialEq)]
+struct Expense {
+    cents: i64,
+    category: String,
+    note: String,
+}
+
+impl Expense {
+    /// Una riga del file dati: `cents,category,note`.
+    fn to_line(&self) -> String {
+        format!("{},{},{}", self.cents, self.category, self.note)
+    }
+
+    fn from_line(line: &str) -> Result<Expense, String> {
+        let mut fields = line.splitn(3, ','); // la nota stessa può contenere virgole
+        let (Some(cents), Some(category)) = (fields.next(), fields.next()) else {
+            return Err("expected `cents,category,note`".to_string());
+        };
+        let cents: i64 = cents
+            .parse()
+            .map_err(|e| format!("bad amount {cents:?}: {e}"))?;
+        let note = fields.next().unwrap_or("");
+        Ok(Expense {
+            cents,
+            category: category.to_string(),
+            note: note.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Command {
+    Add(Expense),
+    List { category: Option<String> },
+    Summary,
+    Help,
+}
+
+fn parse_command(args: &[&str]) -> Result<Command, String> {
+    match args {
+        [] | ["help" | "-h" | "--help", ..] => Ok(Command::Help),
+        ["add", amount, category, note @ ..] => {
+            let Some(cents) = parse_amount(amount) else {
+                return Err(format!(
+                    "invalid amount {amount:?}, expected something like 12.50"
+                ));
+            };
+            if category.contains(',') {
+                return Err(format!("category {category:?} cannot contain a comma"));
+            }
+            Ok(Command::Add(Expense {
+                cents,
+                category: category.to_lowercase(),
+                note: note.join(" "),
+            }))
+        }
+        ["list"] => Ok(Command::List { category: None }),
+        ["list", category] => Ok(Command::List {
+            category: Some(category.to_lowercase()),
+        }),
+        ["summary"] => Ok(Command::Summary),
+        _ => Err(format!("unrecognized arguments: {}", args.join(" "))),
+    }
+}
+
+// ---------- errori ----------
+
+#[derive(Debug)]
+enum LedgerError {
+    Usage(String),
+    Corrupt { line: usize, reason: String },
+    Overflow,
+    Io(io::Error),
+}
+
+impl fmt::Display for LedgerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LedgerError::Usage(msg) => write!(f, "{msg}"),
+            LedgerError::Corrupt { line, reason } => write!(f, "data file, line {line}: {reason}"),
+            LedgerError::Overflow => write!(f, "total too large to represent"),
+            LedgerError::Io(e) => write!(f, "cannot access the data file: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for LedgerError {}
+
+impl From<io::Error> for LedgerError {
+    fn from(e: io::Error) -> Self {
+        LedgerError::Io(e)
+    }
+}
+
+// ---------- archiviazione ----------
+
+fn load(path: &str) -> Result<Vec<Expense>, LedgerError> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut expenses = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let expense = Expense::from_line(line).map_err(|reason| LedgerError::Corrupt {
+            line: index + 1,
+            reason,
+        })?;
+        expenses.push(expense);
+    }
+    Ok(expenses)
+} // qui `text` viene rilasciato: ogni Expense possiede copie delle sue stringhe
+
+fn append(path: &str, expense: &Expense) -> Result<(), LedgerError> {
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{}", expense.to_line())?;
+    Ok(())
+} // qui `file` viene rilasciato, e questo lo chiude
+
+// ---------- report ----------
+
+fn print_list(expenses: &[Expense], category: Option<&str>) {
+    let mut shown = 0;
+    for e in expenses {
+        if category.is_some_and(|c| c != e.category) {
+            continue;
+        }
+        let amount = format_cents(e.cents);
+        println!("{amount:>10}  {:<12} {}", e.category, e.note);
+        shown += 1;
+    }
+    if shown == 0 {
+        println!("no expenses found");
+    }
+}
+
+/// Totale per categoria, dal più grande. None se un totale non sta in un i64.
+fn totals_by_category(expenses: &[Expense]) -> Option<Vec<(&str, i64)>> {
+    let mut totals: HashMap<&str, i64> = HashMap::new();
+    for e in expenses {
+        let total = totals.entry(e.category.as_str()).or_insert(0);
+        *total = total.checked_add(e.cents)?;
+    }
+    let mut rows: Vec<(&str, i64)> = totals.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0))); // prima il più grande, poi per nome
+    Some(rows)
+}
+
+fn print_summary(expenses: &[Expense]) -> Result<(), LedgerError> {
+    let rows = totals_by_category(expenses).ok_or(LedgerError::Overflow)?;
+    let mut grand_total: i64 = 0;
+    for (_, cents) in &rows {
+        grand_total = grand_total
+            .checked_add(*cents)
+            .ok_or(LedgerError::Overflow)?;
+    }
+    for (category, cents) in &rows {
+        let share = if grand_total == 0 {
+            0.0
+        } else {
+            *cents as f64 / grand_total as f64 * 100.0
+        };
+        println!("{category:<12} {:>10} {share:>6.1}%", format_cents(*cents));
+    }
+    println!("{:<12} {:>10}", "total", format_cents(grand_total));
+    Ok(())
+}
+
+// ---------- punto di ingresso ----------
+
+fn run(args: &[&str]) -> Result<(), LedgerError> {
+    let path = std::env::var("LEDGER_FILE").unwrap_or_else(|_| DEFAULT_FILE.to_string());
+
+    match parse_command(args).map_err(LedgerError::Usage)? {
+        Command::Help => print!("{USAGE}"),
+        Command::Add(expense) => {
+            append(&path, &expense)?;
+            let amount = format_cents(expense.cents);
+            println!("added {amount} to {}", expense.category);
+        }
+        Command::List { category } => print_list(&load(&path)?, category.as_deref()),
+        Command::Summary => print_summary(&load(&path)?)?,
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect(); // prende in prestito le String qui sopra
+
+    match run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            if let LedgerError::Usage(_) = e {
+                eprint!("\n{USAGE}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_amounts() {
+        assert_eq!(parse_amount("12"), Some(1200));
+        assert_eq!(parse_amount("12.5"), Some(1250));
+        assert_eq!(parse_amount("0.07"), Some(7));
+        assert_eq!(parse_amount("-3.20"), Some(-320));
+        for bad in [
+            "",
+            "12,50",
+            "1.234",
+            "abc",
+            "--5",
+            "+5",
+            "99999999999999999999",
+        ] {
+            assert_eq!(parse_amount(bad), None, "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn formats_cents() {
+        assert_eq!(format_cents(1250), "12.50");
+        assert_eq!(format_cents(-7), "-0.07");
+        assert_eq!(format_cents(i64::MIN), "-92233720368547758.08");
+    }
+
+    #[test]
+    fn lines_round_trip() {
+        let e = Expense {
+            cents: 1250,
+            category: "food".into(),
+            note: "lunch, with Ada".into(),
+        };
+        assert_eq!(Expense::from_line(&e.to_line()), Ok(e));
+    }
+}
+```
+
+## Dove andare da qui
+
+Il programma è piccolo, ma è uno strumento vero ed è una buona base per sperimentare. Alcuni esercizi, più o meno in ordine di difficoltà:
+
+1. **Un comando `total`** che stampa solo il totale complessivo, da usare negli script. Aggiungi una variante, un ramo in `parse_command`, e lascia che il compilatore ti indichi il `match` in `run` da aggiornare.
+2. **Un comando `remove <n>`** che elimina l'n-esima spesa mostrata da `list`. Dovrai riscrivere l'intero file: `load`, rimuovi dal `Vec` (prima controlla l'indice con `get` o `checked_sub`, ricordando `len() - 1`), poi `fs::write` di tutte le righe.
+3. **Date.** Registra quando è stata fatta ogni spesa e aggiungi `summary --month 2026-10`. La libreria standard ti dà solo `SystemTime`; la formattazione delle date è il compito dei crate `jiff` o `chrono`.
+4. **Budget.** Un comando `budget food 200` che memorizza un limite per categoria, e un riepilogo che avvisa quando una categoria lo supera.
+
+In uno strumento di produzione sostituiresti anche alcune parti scritte a mano con crate noti di <Term id="crates-io">crates.io</Term>, ciascuno aggiungibile con `cargo add`:
+
+| Scritto a mano qui | Crate | Cosa aggiunge |
+| --- | --- | --- |
+| Parsing degli argomenti con i pattern sulle slice | `clap` | `--help` generato, flag, sottocomandi, suggerimenti per gli errori di battitura |
+| `LedgerError` | <Term id="anyhow">`anyhow`</Term>, <Term id="thiserror">`thiserror`</Term> | Catene di contesto per gli errori, meno boilerplate |
+| `to_line` / `from_line` | `csv` + `serde` | Quoting ed escaping, qualsiasi formato dalla stessa struct |
+| Centesimi in un `i64` | `rust_decimal` | Aritmetica decimale con valute e modalità di arrotondamento |
+
+Farlo a mano una volta resta comunque il modo migliore per capire cosa fanno quei crate per te. Il percorso intermedio riparte da qui: organizzare il codice in moduli, <Term id="trait">trait</Term> e <Term id="generics">generics</Term> per far funzionare `print_list` con qualsiasi tipo di record, <Term id="iterator">iteratori</Term> e <Term id="closure">closure</Term> per trasformare i cicli in pipeline, e <Term id="lifetime">lifetime</Term> per spiegare cosa ha dedotto il compilatore su `totals_by_category`.
+
+## Punti chiave
+
+- Una CLI utile sta in poche centinaia di righe di libreria standard: `std::env` per gli argomenti, `std::fs` e `std::io` per i file, `std::process::ExitCode` per il risultato.
+- Rappresenta il denaro come centesimi interi con aritmetica controllata; usa i float solo per la visualizzazione.
+- Analizza l'input non fidato una sola volta, al confine, trasformandolo in un enum; il resto del programma lavora poi con tipi invece che con stringhe.
+- Lascia che l'ownership dia forma al flusso dei dati: i record possiedono i loro dati, i report li prendono in prestito e i buffer temporanei vengono rilasciati appena la loro funzione termina.
+- Tieni `main` snello: una funzione `run` restituisce `Result`, e `main` trasforma gli errori in messaggi su stderr e in un codice di uscita.
+- Le funzioni pure sono facili da testare; gli unit test `#[cfg(test)]` vivono accanto al codice e non costano nulla nelle build di release.

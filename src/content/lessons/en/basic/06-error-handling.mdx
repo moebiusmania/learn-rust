@@ -241,6 +241,48 @@ Two <Term id="crate">crates</Term> cover nearly all real-world needs. **<Term id
 Checked exceptions in Java tried to put failures in signatures but propagated implicitly and could not be abstracted over generically. Python and JavaScript exceptions are invisible in signatures entirely. Rust's approach is closer to functional languages: errors are values, propagation is explicit but one character long, and the type system knows exactly which errors can reach any given point.
 </Callout>
 
+## Building toward the project
+
+`ledger` can fail in four different ways, and they deserve different treatment: the user typed something invalid, a line of the data file is corrupted, a total overflowed, or the operating system refused to open the file. The final program gives them one error enum, following the design from this lesson:
+
+```rust
+#[derive(Debug)]
+enum LedgerError {
+    Usage(String),                           // bad arguments: also print the help text
+    Corrupt { line: usize, reason: String }, // say which line of the file is broken
+    Overflow,                                // a total does not fit in an i64
+    Io(io::Error),                           // From<io::Error> lets `?` convert it
+}
+```
+
+One detail changes for a tool used by people rather than developers. Returning `Result` from `main` prints the error's `Debug` form (`Usage("…")`), which is not a message for users. Instead, the program logic lives in a `run` function that returns `Result`, and `main` turns the outcome into a readable message on stderr and an exit code:
+
+<Playground title="ledger: errors for humans, exit codes for scripts">
+```rust
+use std::process::ExitCode;
+
+fn run(amount: &str) -> Result<(), String> {
+    if !amount.contains('.') {
+        return Err(format!("invalid amount {amount:?}, expected something like 12.50"));
+    }
+    println!("added {amount}");
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match run("12,50") {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}"); // stderr: a message for humans, not a Debug dump
+            ExitCode::FAILURE // exit status 1, so scripts can detect the failure
+        }
+    }
+}
+```
+</Playground>
+
+Exit code 1 lets shell scripts detect the failure: `ledger add 12,50 food && echo saved` prints nothing.
+
 ## Key takeaways
 
 - Use `Result<T, E>` for failures the caller should handle; reserve `panic!` for bugs and broken invariants.

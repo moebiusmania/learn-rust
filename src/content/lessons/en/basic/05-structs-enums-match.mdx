@@ -314,6 +314,61 @@ fn main() {
 Modern Java (sealed interfaces + records + pattern matching for `switch`) and C# (records + switch expressions) are converging on the same idea. The difference is that in Rust this is the *default* way to model data, the standard library is built on it (`Option`, <Term id="result">`Result`</Term>, `Ordering`, `Cow`), and enums are <Term id="stack">stack</Term> values with no allocation per variant.
 </Callout>
 
+## Building toward the project
+
+`ledger` has two central types, and this lesson provides both. The data is a struct, `Expense`, with a method that writes it as a line of the data file (`to_line(&self)`) and an associated function that parses one back (`Expense::from_line(line)`). The command line is an enum, one variant per command, each carrying exactly the data it needs.
+
+Parsing the arguments is a `match` on a **slice pattern**: each arm describes the exact shape of a valid command line, and `..` absorbs the rest. A first version:
+
+<Playground title="ledger: commands as an enum">
+```rust
+enum Command {
+    Add { amount: String, category: String },
+    List { category: Option<String> },
+    Summary,
+    Help,
+}
+
+fn parse_command(args: &[&str]) -> Option<Command> {
+    match args {
+        [] | ["help", ..] => Some(Command::Help),
+        ["add", amount, category, ..] => Some(Command::Add {
+            amount: amount.to_string(),
+            category: category.to_string(),
+        }),
+        ["list"] => Some(Command::List { category: None }),
+        ["list", category] => Some(Command::List {
+            category: Some(category.to_string()),
+        }),
+        ["summary"] => Some(Command::Summary),
+        _ => None,
+    }
+}
+
+fn main() {
+    let inputs: [&[&str]; 5] = [
+        &["add", "12.50", "food", "lunch"],
+        &["list", "food"],
+        &["summary"],
+        &["summary", "extra"],
+        &[],
+    ];
+    for args in inputs {
+        match parse_command(args) {
+            Some(Command::Add { amount, category }) => println!("add {amount} to {category}"),
+            Some(Command::List { category: Some(c) }) => println!("list only {c}"),
+            Some(Command::List { category: None }) => println!("list everything"),
+            Some(Command::Summary) => println!("show the summary"),
+            Some(Command::Help) => println!("print the help"),
+            None => println!("unrecognized: {args:?}"),
+        }
+    }
+}
+```
+</Playground>
+
+Compare it with a chain of `if args[0] == "add" && args.len() >= 3` checks: patterns cannot index out of bounds, and `["summary", "extra"]` simply matches no arm. Because `main` matches on every variant, adding a command later makes the compiler point at each place that must handle it. The final version validates the amount and builds a complete `Expense` directly inside `Command::Add`.
+
 ## Key takeaways
 
 - Data (`struct`, `enum`) and behaviour (`impl`) are declared separately; there are no classes, constructors or inheritance.

@@ -186,6 +186,35 @@ Le variabili locali vengono rilasciate in **ordine inverso rispetto alla dichiar
 Il compilatore inserisce le chiamate a drop durante la costruzione della <Term id="mir">MIR</Term>, in ogni punto in cui un valore posseduto esce dallo scope, compresi i `return` anticipati, il <Term id="question-mark">`?`</Term> e i <Term id="panic">panic</Term> che <Term id="unwinding">srotolano lo stack</Term>. Quando un valore viene spostato solo *in certi casi* (per esempio dentro un `if`), il compilatore aggiunge sullo stack un booleano nascosto, il **<Term id="drop-flag">drop flag</Term>**, e lo controlla alla fine dello scope. Questo è l'intero costo a runtime dell'ownership: di solito niente, a volte un byte e un salto condizionale.
 </Callout>
 
+## Verso il progetto
+
+`ledger` tiene i dati in un file di testo, una spesa per riga, e li carica in un `Vec` di record. È l'ownership a decidere come sono fatti quei record:
+
+```rust
+struct Expense {
+    cents: i64,
+    category: String, // posseduta, non &str
+    note: String,
+}
+```
+
+Il loader legge l'intero file in una sola `String`, e ogni riga è una vista presa in prestito da essa. Se `Expense` memorizzasse slice `&str` di quel buffer, il buffer dovrebbe restare vivo finché esiste anche una sola spesa. Possedere le stringhe è più semplice: ogni record copia categoria e nota una volta sola, durante il caricamento, e il buffer del file viene rilasciato appena il loader termina.
+
+```rust
+// semplificato; la versione vera gestisce gli errori con `?`, dalla lezione sugli errori
+fn load(path: &str) -> Vec<Expense> {
+    let text = std::fs::read_to_string(path).unwrap(); // possiede l'intero file
+    let mut expenses = Vec::new();
+    for line in text.lines() {
+        // ogni `line` è un prestito da `text`; from_line copia ciò che tiene
+        expenses.push(Expense::from_line(line).unwrap());
+    }
+    expenses // spostato al chiamante: si copia solo l'handle del Vec
+} // qui `text` viene rilasciato e il suo buffer liberato
+```
+
+Nel programma finale compaiono altre due idee legate all'ownership. Restituire `expenses` sposta il vettore: il chiamante riceve lo stesso buffer sullo heap, non una copia di ogni spesa. E scrivere sul file non richiede nessuna chiamata a `close()`: il `File` viene rilasciato alla fine della funzione che lo ha aperto, su ogni percorso, e questo lo chiude.
+
 ## Punti chiave
 
 - Ogni valore ha esattamente un proprietario; quando il proprietario esce dallo scope il valore viene rilasciato.

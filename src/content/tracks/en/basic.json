@@ -1,8 +1,8 @@
 {
   "title": "Basic",
   "tagline": "The Rust mental model",
-  "summary": "Toolchain, types, ownership, borrowing, enums and error handling: the ideas you need before writing any real Rust.",
-  "intro": "Rust looks familiar at first glance: functions, structs, loops, generics. The real difference is that the compiler tracks who owns every value and for how long. This track builds that mental model, step by step, contrasting it with garbage-collected and manually managed languages.",
+  "summary": "Toolchain, types, ownership, borrowing, enums and error handling: the ideas you need before writing any real Rust, put together at the end in a small command-line app built from scratch.",
+  "intro": "Rust looks familiar at first glance: functions, structs, loops, generics. The real difference is that the compiler tracks who owns every value and for how long. This track builds that mental model, step by step, contrasting it with garbage-collected and manually managed languages. Each lesson contributes one piece of a final project, ledger, a command-line expense tracker that you build in the last lesson using only the standard library.",
   "concepts": [
     { "title": "Compiled ahead of time", "text": "rustc produces a native binary through LLVM. There is no VM and no JIT: what you ship is machine code plus a statically linked standard library." },
     { "title": "No garbage collector", "text": "Every value has exactly one owner. When the owner goes out of scope the value is dropped, deterministically, at a point you can read in the source code." },

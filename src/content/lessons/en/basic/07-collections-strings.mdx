@@ -207,6 +207,39 @@ fn main() {
 
 Iterating by value is not a performance trap: it moves each `String` out without copying its heap buffer, then frees the vector's own buffer at the end. It is the right choice when you are transforming one collection into another and no longer need the original.
 
+## Building toward the project
+
+The `summary` command of `ledger` is a word-count problem in disguise: instead of counting words, it adds up amounts per category. Everything it needs is in this lesson: `lines()` and `splitn` to read the data file, a `HashMap` with the entry API to accumulate the totals, and `sort_by` to order the result, since the map's iteration order is unspecified.
+
+<Playground title="ledger: totals per category">
+```rust
+use std::collections::HashMap;
+
+fn main() {
+    // The ledger data file: cents,category,note (the note may contain commas)
+    let file = "1250,food,lunch, with Ada\n4500,transport,monthly pass\n820,food,coffee beans\n";
+
+    let mut totals: HashMap<&str, i64> = HashMap::new();
+    for line in file.lines() {
+        let mut fields = line.splitn(3, ','); // at most 3 fields
+        let cents: i64 = fields.next().unwrap().parse().unwrap();
+        let category = fields.next().unwrap(); // &str borrowed from `file`
+        let note = fields.next().unwrap_or("");
+        println!("{cents:>6}  {category:<10} {note}");
+        *totals.entry(category).or_insert(0) += cents;
+    }
+
+    let mut rows: Vec<(&str, i64)> = totals.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0))); // largest first, then by name
+    println!("{rows:?}");
+}
+```
+</Playground>
+
+Notice the key type: `HashMap<&str, i64>`. The keys borrow from the text instead of being copied into new `String`s. `splitn(3, ',')` stops after the second comma, so a note may contain commas of its own. The `unwrap()` calls are acceptable in a sketch; the final program replaces them with the error handling from the previous lesson, and reports the line number of a corrupted entry.
+
+That completes the toolbox. The next lesson puts all the pieces together.
+
 ## Key takeaways
 
 - `Vec<T>` is pointer, length and capacity; growth doubles the buffer and moves the elements, so `push` is amortized O(1).

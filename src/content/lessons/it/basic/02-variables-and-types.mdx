@@ -1,8 +1,8 @@
 ---
 title: Variabili, tipi ed espressioni
 description: Binding immutabili, shadowing, una gerarchia numerica precisa, gestione esplicita dell'overflow e un linguaggio in cui quasi tutto è un'espressione.
-duration: 20
-tags: [let, mut, shadowing, interi, overflow, espressioni]
+duration: 30
+tags: [let, mut, shadowing, interi, float, overflow, espressioni]
 ---
 
 Variabili e tipi primitivi di Rust somigliano a quelli che conosci già, ma tre impostazioni di default sono capovolte: i <Term id="binding">binding</Term> sono **immutabili** a meno che tu non dica il contrario, le conversioni numeriche **non sono mai implicite**, e blocchi, `if` e <Term id="match">`match`</Term> sono **<Term id="expression">espressioni</Term>** che producono valori. Ognuna di queste scelte serve a far dire al codice esattamente quello che fa.
@@ -80,18 +80,75 @@ static GREETING: &str = "hello";        // un unico indirizzo fisso nel binario
 
 ## Una gerarchia numerica precisa
 
-Rust non ha un tipo "number" e non allarga mai i tipi implicitamente. Ogni tipo intero dichiara dimensione e segno:
+Rust non ha un tipo "number" e non allarga mai i tipi implicitamente. Ogni tipo intero dichiara dimensione e segno, e la dimensione decide l'intervallo: un tipo senza segno di `N` bit va da `0` a `2^N − 1`, uno con segno da `−2^(N−1)` a `2^(N−1) − 1`.
 
-| Dimensione | Con segno | Senza segno | Note |
-| --- | --- | --- | --- |
-| 8 bit | `i8` | `u8` | `u8` è il tipo byte |
-| 16 bit | `i16` | `u16` | |
-| 32 bit | `i32` | `u32` | default per i letterali interi |
-| 64 bit | `i64` | `u64` | |
-| 128 bit | `i128` | `u128` | |
-| puntatore | <Term id="usize">`isize`</Term> | `usize` | indici e lunghezze sono `usize` |
+| Dimensione | Con segno | Senza segno | Intervallo con segno | Massimo senza segno | Note |
+| --- | --- | --- | --- | --- | --- |
+| 8 bit | `i8` | `u8` | da −128 a 127 | 255 | `u8` è il tipo byte |
+| 16 bit | `i16` | `u16` | da −32.768 a 32.767 | 65.535 | |
+| 32 bit | `i32` | `u32` | ±2,1 × 10⁹ | 4,3 × 10⁹ | default per i letterali interi |
+| 64 bit | `i64` | `u64` | ±9,2 × 10¹⁸ | 1,8 × 10¹⁹ | |
+| 128 bit | `i128` | `u128` | ±1,7 × 10³⁸ | 3,4 × 10³⁸ | |
+| puntatore | <Term id="usize">`isize`</Term> | `usize` | come 64 o 32 bit | come 64 o 32 bit | indici e lunghezze sono `usize` |
+
+Non serve imparare i limiti a memoria: ogni tipo li espone come costanti, per esempio `u8::MAX` (255), `i32::MIN` e `u64::BITS` (64).
 
 I numeri in virgola mobile sono `f32` e `f64` (il default), `bool` occupa un byte e <Term id="char">`char`</Term> è uno **<Term id="unicode-scalar-value">Unicode scalar value</Term>** da 4 byte, non un byte e non un'unità <Term id="utf-16">UTF-16</Term>. Le stringhe sono <Term id="utf-8">UTF-8</Term>, quindi `'é'.len_utf8()` vale 2 mentre `size_of::<char>()` vale 4.
+
+### Se vieni da JavaScript: che fine ha fatto `number`?
+
+JavaScript ha solo due tipi numerici, ed entrambi fanno un compromesso diverso da quello di Rust:
+
+- **`number`** è un float IEEE-754 a 64 bit, cioè esattamente l'`f64` di Rust. I numeri interi al suo interno sono esatti solo fino a `Number.MAX_SAFE_INTEGER` (2⁵³ − 1, circa 9 × 10¹⁵); oltre vengono arrotondati in silenzio. Gli operatori bit a bit convertono prima, sempre in silenzio, a un intero con segno a 32 bit: ecco perché `2 ** 31 | 0` vale `-2147483648`.
+- **`bigint`** è un intero a precisione arbitraria allocato sullo heap. Non va mai in overflow, ma ogni operazione è una chiamata a funzione su un buffer di lunghezza variabile, e non si può mescolare con `number` senza una conversione esplicita.
+
+Rust offre invece tanti tipi a dimensione fissa che corrispondono direttamente ai registri della CPU. L'aritmetica su di essi è una singola istruzione macchina, un `u8` occupa un byte in una struct o in un array invece di otto, e il tipo documenta (e il compilatore garantisce) quali valori sono possibili. Se hai usato i **typed array** di JS, questi tipi li conosci già: `Uint8Array`, `Int32Array`, `Float32Array` e `BigInt64Array` contengono valori `u8`, `i32`, `f32` e `i64`.
+
+<Compare left="JavaScript">
+```js
+const price = 19.99;              // number (un float a 64 bit)
+const count = 3;                  // number (sempre un float, solo intero)
+const bytes = new Uint8Array(4);  // quattro valori u8
+const id = 9007199254740993n;     // deve essere bigint: come number verrebbe arrotondato
+2 ** 53 + 1 === 2 ** 53;          // true: precisione persa in silenzio
+```
+
+```rust
+let price = 19.99;                       // f64, il float di default
+let count = 3;                           // i32, l'intero di default
+let bytes = [0u8; 4];                    // quattro valori u8
+let id: u64 = 9_007_199_254_740_993;     // sta in un u64 e resta esatto
+(2u64.pow(53) + 1) == 2u64.pow(53);      // false: u64 è esatto fino a 1,8 × 10¹⁹
+```
+</Compare>
+
+`f64` si comporta esattamente come un `number` di JS: `0.1 + 0.2 != 0.3`, `1.0 / 0.0` vale `inf` e `0.0 / 0.0` vale `NaN`. Due differenze sorprendono chi viene da JS. Primo, interi e float sono tipi diversi: `2` è un intero e `2.0` un float, quindi `let x: f64 = 2;` non compila, e la divisione **intera** per zero provoca un panic invece di produrre `Infinity`. Secondo, poiché `NaN != NaN`, i float non hanno un ordinamento totale: un `Vec<f64>` non si ordina con un semplice `.sort()` (usa `.sort_by(|a, b| a.total_cmp(b))`) e i float non possono essere chiavi di una `HashMap`.
+
+### Quale tipo usare?
+
+- **Nessun motivo particolare per scegliere**: `i32`. È il default dei letterali interi ed è veloce su ogni piattaforma.
+- **Indici, lunghezze, conteggi di elementi in memoria**: `usize`. `Vec::len()` restituisce un `usize` e l'indicizzazione lo richiede, quindi usarlo evita conversioni.
+- **Byte grezzi, contenuto di file, dati di rete**: `u8`, di solito come `&[u8]` o `Vec<u8>`.
+- **ID, timestamp, dimensioni di file, importi in centesimi**: `i64` o `u64`. `Date.now()` restituisce già circa 1,8 × 10¹², ben oltre i 4,3 × 10⁹ di un `u32`.
+- **Valori frazionari**: `f64`, con le stesse avvertenze di JS. Mai usare i float per i soldi.
+- **Dove useresti `bigint`**: `i128` o `u128` arrivano a circa 10³⁸ senza allocazioni. Per interi davvero illimitati usa un crate come `num-bigint`.
+- **Con o senza segno?** I tipi senza segno codificano nel tipo "non può essere negativo", ma la sottrazione diventa una trappola: `a - b` con `b > a` va in overflow (vedi sotto). Preferisci i tipi senza segno per dimensioni, byte e maschere di bit, quelli con segno per le quantità di cui calcoli differenze.
+
+`usize` e `isize` sono larghi quanto un puntatore sulla piattaforma di destinazione: 64 bit su un normale desktop o server, ma 32 bit su `wasm32`, cosa che conta se compili Rust in WebAssembly per il browser.
+
+### Letterali e conversioni
+
+Un letterale prende il tipo da un suffisso, da un'annotazione o da come viene usato; se nulla lo vincola, ricade su `i32` o `f64`.
+
+```rust
+let a = 42;                 // i32, nulla dice altrimenti
+let b = 42u8;               // il suffisso sceglie il tipo
+let c: u64 = 42;            // ...oppure lo fa un'annotazione
+let million = 1_000_000;    // underscore come separatori, come in JS
+let mask = 0xff_u8;         // esadecimale, e anche binario (0b1010) e ottale (0o755)
+let letter = b'A';          // letterale byte: un u8 con valore 65
+let x = 2.0;                // f64; un semplice `2` sarebbe un intero
+```
 
 Le conversioni sono sempre visibili nel codice:
 
@@ -100,6 +157,8 @@ let small: u8 = 200;
 let wide: u32 = small.into();          // senza perdita: esiste From<u8> for u32
 let checked = u8::try_from(300u32);    // può fallire: Err(TryFromIntError)
 let truncated = 300u32 as u8;          // `as` tiene i bit bassi: 44
+let rounded = 3.99_f64 as i32;         // 3: da float a intero tronca verso lo zero
+let clamped = 1e10_f64 as i32;         // i32::MAX: e satura ai limiti (NaN dà 0)
 let half = 7 / 2;                      // 3: divisione intera
 let ratio = 7 as f64 / 2.0;            // 3.5: devi convertire prima
 ```
@@ -110,11 +169,67 @@ let ratio = 7 as f64 / 2.0;            // 3.5: devi convertire prima
 
 ## L'overflow è una decisione tua
 
-Quanto deve fare `250u8 + 10`? Il C dice "comportamento indefinito" per i tipi con segno e "wrap" per quelli senza; Java fa sempre wrap; Python fa crescere l'intero all'infinito. La risposta di Rust è: **scegli tu, in modo esplicito**, e il `+` di default considera un bug l'eventuale <Term id="overflow">overflow</Term>.
+I tipi a dimensione fissa hanno una conseguenza che il `number` di JavaScript nasconde: il risultato di un'operazione può essere troppo grande, o troppo piccolo, per starci. `250u8 + 10` fa 260, ma un `u8` si ferma a 255. Cosa deve succedere? Il C dice <Term id="ub">comportamento indefinito</Term> per i tipi con segno e "wrap" per quelli senza; Java fa sempre wrap; Python e il `bigint` di JS fanno crescere l'intero all'infinito; il `number` di JS va avanti ma perde precisione in silenzio oltre 2⁵³. La risposta di Rust è: **scegli tu, in modo esplicito**, e il `+` di default considera un bug l'eventuale <Term id="overflow">overflow</Term>.
+
+### Cosa succede ai bit
+
+La CPU somma in binario e ha esattamente 8 bit per memorizzare un risultato `u8`:
+
+```text
+  250  =   1111_1010
++  10  =   0000_1010
+--------------------
+  260  = 1_0000_0100   servono 9 bit
+           0000_0100   il nono bit viene scartato: 4
+```
+
+Scartare i bit alti che non ci stanno equivale a prendere il risultato modulo 2⁸ = 256: 260 − 256 = 4. Questo è il **wrapping**, come il contachilometri di un'auto che passa da 999999 a 000000. Funziona anche nell'altra direzione: `0u8 - 1` diventa 255.
+
+I tipi con segno usano il <Term id="twos-complement">complemento a due</Term>: gli stessi 8 bit, ma il bit più alto vale −128 invece di +128. Quindi `0111_1111` è 127, e aggiungendo uno si ottiene `1000_0000`, che si legge −128: il valore positivo più grande ricomincia dal più negativo. Ecco perché `i8::MIN.abs()` non ha una risposta valida: +128 non ci sta.
+
+Anche JavaScript fa wrap in qualche punto, solo non dove lo cercheresti: `(2 ** 31) | 0` vale `-2147483648`, `new Uint8Array([260])[0]` vale `4` e `BigInt.asUintN(8, 260n)` vale `4n`. `Uint8ClampedArray`, il tipo dietro ai pixel di un canvas, fa l'opposto e **satura**: memorizzando 260 ottieni 255. Rust ti lascia scegliere l'uno o l'altro comportamento, operazione per operazione.
 
 <IntegerExplorer />
 
-Prova `i8` con `a = 127, b = 1`: lo schema di bit `0111_1111` più uno diventa `1000_0000`, che in <Term id="twos-complement">complemento a due</Term> si legge `-128`. Poi prova `u8` con `250 + 10`.
+Prova `i8` con `a = 127, b = 1`, poi `u8` con `250 + 10`, e confronta gli schemi di bit.
+
+### In debug panic, in release wrap
+
+Per gli operatori semplici `+`, `-` e `*`, il risultato dipende dalla build:
+
+- **Build di debug** (`cargo run`, `cargo test`): il compilatore inserisce un controllo dopo ogni operazione e provoca un <Term id="panic">panic</Term> con `attempt to add with overflow`. I bug emergono durante lo sviluppo, alla riga che li ha causati.
+- **Build di release** (`cargo build --release`): il controllo viene rimosso e il valore fa wrap in silenzio. In Rust è un comportamento definito, non indefinito come in C, ma non è quasi mai quello che intendevi.
+
+<Callout type="runtime">
+Nelle <Term id="profile">build di release</Term> l'aritmetica semplice viene compilata in una singola istruzione della CPU; nelle build di debug ogni operazione è seguita da un salto condizionato sul flag di overflow della CPU che chiama il gestore dei panic. Il comportamento dipende dall'impostazione `overflow-checks` del profilo <Term id="cargo">Cargo</Term>, quindi puoi mantenere i controlli anche in produzione con `[profile.release] overflow-checks = true`, a un costo contenuto.
+</Callout>
+
+L'overflow che incontrerai più spesso non è una moltiplicazione enorme, ma una **sottrazione senza segno che scende sotto zero**:
+
+<Playground title="Il classico: len() - 1 su una slice vuota">
+```rust
+fn last_index(items: &[i32]) -> usize {
+    items.len() - 1
+}
+
+fn main() {
+    println!("{}", last_index(&[10, 20, 30])); // 2
+    println!("{}", last_index(&[]));           // debug: panic; release: 18446744073709551615
+}
+```
+</Playground>
+
+In JavaScript `[].length - 1` vale `-1`, un valore che probabilmente il tuo codice controlla. Un `usize` non può valere −1: una build di debug va in panic con `attempt to subtract with overflow`, mentre una build di release produce `usize::MAX`, che fallisce molto più tardi (un indice fuori dai limiti, un ciclo che non finisce mai) lontano dalla vera causa. Scrivi invece quello che intendi: `items.len().checked_sub(1)` restituisce un `Option<usize>`, `items.last()` evita del tutto l'aritmetica e `a.abs_diff(b)` dà la distanza tra due valori senza segno senza preoccuparsi di quale sia il più grande.
+
+Alcune regole non dipendono affatto dalla build:
+
+- Quando i valori sono noti in compilazione, l'overflow è un errore di compilazione: `let x: u8 = 256;` fallisce con `literal out of range for u8`, e `i32::MAX + 1` o `1u8 << 8` con `this arithmetic operation will overflow`.
+- La divisione intera per zero e `i32::MIN / -1` (il cui risultato, +2³¹, non ci sta) provocano **sempre** un panic, anche nelle build di release.
+- I cast con `as` non vanno mai in panic: da intero a intero tengono i bit bassi, da float a intero saturano.
+
+### Scegliere una strategia
+
+Quando l'overflow è una possibilità reale e non un bug, dichiaralo con una delle quattro famiglie di metodi, disponibili su ogni tipo intero:
 
 <Playground title="Quattro strategie di overflow">
 ```rust
@@ -133,15 +248,13 @@ fn main() {
 ```
 </Playground>
 
-- `wrapping_*` per hash, checksum e contatori circolari.
-- `checked_*` restituisce un <Term id="option">`Option`</Term> quando l'overflow significa input non valido.
-- `saturating_*` per cose come volume, avanzamento o contatori di tentativi che devono fermarsi al limite.
-- `overflowing_*` quando ti servono sia il valore dopo il wrap sia il flag di riporto.
+- `wrapping_*` per hash, checksum e contatori circolari, dove l'aritmetica modulare è proprio lo scopo.
+- `checked_*` restituisce un <Term id="option">`Option`</Term>, `None` in caso di overflow, quando l'overflow significa input non valido.
+- `saturating_*` si ferma a `MIN` o `MAX`, per cose come volume, avanzamento o contatori di tentativi (il comportamento di `Uint8ClampedArray`).
+- `overflowing_*` quando ti servono sia il valore dopo il wrap sia un flag che dice se c'è stato.
 - `std::num::Wrapping<T>` e `Saturating<T>` incapsulano un tipo in modo che il semplice `+` segua quella politica.
 
-<Callout type="runtime">
-Nelle <Term id="profile">build di release</Term> l'aritmetica semplice viene compilata in una singola istruzione della CPU. Nelle build di debug il compilatore aggiunge un controllo di overflow dopo ogni operazione e chiama il gestore dei <Term id="panic">panic</Term> se scatta. Il comportamento dipende dall'impostazione `overflow-checks` del profilo <Term id="cargo">Cargo</Term>, quindi puoi mantenere i controlli anche in produzione con `[profile.release] overflow-checks = true`, a un costo contenuto.
-</Callout>
+Ogni famiglia esiste per tutte le operazioni che possono andare in overflow: `_add`, `_sub`, `_mul`, `_div`, `_neg`, `_pow`, `_shl` e altre.
 
 ## Tuple e array
 
@@ -200,11 +313,47 @@ fn main() {
 
 Prova ad aggiungere un punto e virgola dopo `x * x`: ora il corpo della funzione vale `()`, e il compilatore segnala `mismatched types: expected i32, found ()`, indicando il punto e virgola e suggerendo di rimuoverlo. Anche i cicli sono espressioni: `let found = loop { … break value; };` restituisce un valore da un `loop`.
 
+## Verso il progetto
+
+`ledger` registra importi di denaro, e questa lezione decide come memorizzarli. I float sono esclusi: `f64` non rappresenta esattamente la maggior parte delle frazioni decimali, e un registro che sbaglia di un centesimo è un registro rotto. Ogni importo è invece un **`i64` di centesimi**: `12.50` viene memorizzato come `1250`, e il punto decimale esiste solo in stampa. Con segno, perché un rimborso è una spesa negativa; a 64 bit, perché il massimo è circa 92 milioni di miliardi.
+
+<Playground title="ledger: denaro in centesimi interi">
+```rust
+fn format_cents(cents: i64) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    let abs = cents.unsigned_abs(); // u64: a differenza di abs(), non va in overflow su i64::MIN
+    format!("{sign}{}.{:02}", abs / 100, abs % 100)
+}
+
+fn main() {
+    // I float non rappresentano esattamente la maggior parte delle frazioni decimali
+    let float_total = 0.10 + 0.20;
+    println!("as f64:   {float_total}");
+
+    // I centesimi interi sono esatti; il punto decimale esiste solo in stampa
+    let lunch: i64 = 1250; // 12.50
+    let coffee: i64 = 820; // 8.20
+    let refund: i64 = -500; // -5.00: con segno, perché i rimborsi sono negativi
+    let total = lunch + coffee + refund;
+    println!("as cents: {total} -> {}", format_cents(total));
+
+    // Il parsing di "12.50" moltiplica per 100: con controllo, perché l'input arriva da un utente
+    let whole: i64 = 92_233_720_368_547_759;
+    println!("{:?}", whole.checked_mul(100)); // None: andrebbe in overflow
+    println!("{}", format_cents(i64::MIN)); // qui abs() andrebbe in panic
+}
+```
+</Playground>
+
+`format_cents` è esattamente la funzione usata nel programma finale: un'espressione `if` sceglie il segno, `unsigned_abs` evita la trappola dell'overflow su `i64::MIN`, divisione intera e resto separano gli euro dai centesimi, e `{:02}` riempie fino a due cifre. Il parser che trasforma `"12.50"` in `1250` usa `checked_mul` e `checked_add`, perché il suo input arriva dall'utente e un numero enorme deve diventare un errore, non un panic o un valore che ha fatto wrap in silenzio.
+
 ## Punti chiave
 
 - `let` è immutabile in modo profondo; aggiungi `mut` solo dove lo stato cambia davvero.
 - Lo shadowing crea un nuovo binding, eventualmente di un nuovo tipo: ideale per i passaggi di parsing e raffinamento.
-- Ogni tipo intero dichiara la sua ampiezza; non ci sono conversioni implicite. Usa `into`, `try_from` e `as` in modo consapevole.
-- L'overflow provoca un panic in debug e fa wrap in release; quando conta, scegli esplicitamente `wrapping_`, `checked_`, `saturating_` o `overflowing_`.
+- Il `number` di JavaScript è l'`f64` di Rust; al posto di `bigint`, Rust offre interi a dimensione fissa da `i8` a `u128`, ognuno con ampiezza e segno dichiarati.
+- Di default usa `i32` per gli interi, `usize` per indici e lunghezze, `u8` per i byte e `i64`/`u64` per ID e timestamp.
+- Non ci sono conversioni implicite. Usa `into`, `try_from` e `as` in modo consapevole.
+- L'overflow provoca un panic in debug e fa wrap in release; attenzione soprattutto alla sottrazione senza segno. Quando l'overflow è previsto, scegli esplicitamente `wrapping_`, `checked_`, `saturating_` o `overflowing_`.
 - Array e tuple hanno dimensione fissa e stanno bene sullo stack; l'indicizzazione è sempre controllata.
 - Blocchi, `if`, `match` e `loop` sono espressioni; un punto e virgola finale trasforma un valore in `()`.

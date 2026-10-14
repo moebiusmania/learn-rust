@@ -241,6 +241,48 @@ Due <Term id="crate">crate</Term> coprono quasi tutte le esigenze reali. **<Term
 Le checked exception di Java cercavano di mettere i fallimenti nelle firme, ma si propagavano implicitamente e non si potevano astrarre in modo generico. In Python e JavaScript le eccezioni sono del tutto invisibili nelle firme. L'approccio di Rust è più vicino ai linguaggi funzionali: gli errori sono valori, la propagazione è esplicita ma lunga un solo carattere, e il sistema dei tipi sa esattamente quali errori possono arrivare in ogni punto.
 </Callout>
 
+## Verso il progetto
+
+`ledger` può fallire in quattro modi diversi, che meritano trattamenti diversi: l'utente ha scritto qualcosa di non valido, una riga del file dati è corrotta, un totale è andato in overflow, oppure il sistema operativo ha rifiutato di aprire il file. Il programma finale li riunisce in un unico enum di errore, seguendo l'impostazione di questa lezione:
+
+```rust
+#[derive(Debug)]
+enum LedgerError {
+    Usage(String),                           // argomenti sbagliati: stampa anche l'aiuto
+    Corrupt { line: usize, reason: String }, // indica quale riga del file è rotta
+    Overflow,                                // un totale non sta in un i64
+    Io(io::Error),                           // From<io::Error> permette a `?` di convertirlo
+}
+```
+
+Un dettaglio cambia per uno strumento usato da persone e non da sviluppatori. Restituire `Result` da `main` stampa la forma `Debug` dell'errore (`Usage("…")`), che non è un messaggio per gli utenti. La logica del programma vive invece in una funzione `run` che restituisce `Result`, e `main` trasforma l'esito in un messaggio leggibile su stderr e in un exit code:
+
+<Playground title="ledger: errori per le persone, exit code per gli script">
+```rust
+use std::process::ExitCode;
+
+fn run(amount: &str) -> Result<(), String> {
+    if !amount.contains('.') {
+        return Err(format!("invalid amount {amount:?}, expected something like 12.50"));
+    }
+    println!("added {amount}");
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match run("12,50") {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}"); // stderr: un messaggio per persone, non un dump Debug
+            ExitCode::FAILURE // exit status 1, così gli script rilevano il fallimento
+        }
+    }
+}
+```
+</Playground>
+
+L'exit code 1 permette agli script di shell di accorgersi del fallimento: `ledger add 12,50 food && echo saved` non stampa nulla.
+
 ## Punti chiave
 
 - Usa `Result<T, E>` per i fallimenti che il chiamante deve gestire; riserva `panic!` a bug e invarianti violate.
