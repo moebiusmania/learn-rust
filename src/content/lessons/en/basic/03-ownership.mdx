@@ -5,13 +5,13 @@ duration: 25
 tags: [ownership, move, Copy, Clone, Drop, stack vs heap]
 ---
 
-Every language has to answer one question: *when can this memory be freed?* C and C++ leave it to you, and you get leaks, <Term id="double-free">double frees</Term> and <Term id="use-after-free">use-after-free</Term> bugs. Java, Go, Python and JavaScript hand it to a <Term id="garbage-collector">garbage collector</Term>, and you pay with pauses, higher memory usage and no control over when cleanup happens. Rust takes a third route: **every value has exactly one <Term id="ownership">owner</Term>, and the value is freed when its owner goes out of <Term id="scope">scope</Term>**. The compiler checks the rules, so the cost at runtime is zero.
+Every language has to answer one question: *when can this memory be freed?* TypeScript never makes you ask: the JavaScript engine's <Term id="garbage-collector">garbage collector</Term> frees an object some time after nothing refers to it, and you pay with pauses, higher memory usage and no control over when cleanup happens. C and C++ leave the answer to you, and you get leaks, <Term id="double-free">double frees</Term> and <Term id="use-after-free">use-after-free</Term> bugs. Rust takes a third route: **every value has exactly one <Term id="ownership">owner</Term>, and the value is freed when its owner goes out of <Term id="scope">scope</Term>**. The compiler checks the rules, so the cost at runtime is zero.
 
 This lesson is the heart of the language. Take your time with the visualizer.
 
 ## Stack, heap and what a String looks like
 
-You already know the distinction; here is how Rust maps types onto it. Values whose size is known at compile time (integers, floats, `bool`, <Term id="char">`char`</Term>, <Term id="array">arrays</Term>, <Term id="tuple">tuples</Term> and <Term id="struct">structs</Term> of those) live inline: on the <Term id="stack">stack</Term> for local variables. Data whose size is only known at runtime lives on the <Term id="heap">heap</Term>, behind a small fixed-size handle.
+TypeScript hides where values live: the engine decides. Rust shows it in the types. Values whose size is known at compile time (integers, floats, `bool`, <Term id="char">`char`</Term>, <Term id="array">arrays</Term>, <Term id="tuple">tuples</Term> and <Term id="struct">structs</Term> of those) live inline: on the <Term id="stack">stack</Term> for local variables. Data whose size is only known at runtime lives on the <Term id="heap">heap</Term>, behind a small fixed-size handle.
 
 A <Term id="string">`String`</Term> is exactly such a handle: a 24-byte struct (on 64-bit <Term id="target">targets</Term>) with a **pointer** to a heap buffer, a **length** and a **<Term id="capacity">capacity</Term>**. A <Term id="string-literal">string literal</Term> like `"hello"` is different: its bytes are baked into the read-only data of the binary, and you get a <Term id="str">`&'static str`</Term>, a <Term id="borrow">borrowed</Term> view that lives for the whole program.
 
@@ -50,13 +50,13 @@ fn main() {
 
 The error, `borrow of moved value: s1`, points at both the move and the later use. It even suggests <Term id="clone">`.clone()`</Term>. This check is purely static: there is no "moved" flag tested at runtime and no null left behind.
 
-<Compare left="Python">
-```python
-a = ["hello"]
-b = a            # two names, one list
-b.append("world")
-print(a)         # ['hello', 'world']: aliasing
-# the GC frees the list when no name refers to it
+<Compare left="TypeScript">
+```ts
+const a = ["hello"];
+const b = a;     // two names, one array
+b.push("world");
+console.log(a);  // ["hello", "world"]: aliasing
+// the GC frees the array when nothing refers to it
 ```
 
 ```rust
@@ -68,19 +68,19 @@ b.push("world");
 ```
 </Compare>
 
-In garbage-collected languages, assignment creates an **<Term id="aliasing">alias</Term>**: two names for the same object, either of which can modify it. Rust's move semantics mean there is never silent aliasing of owned data. When you do want two names to see the same data, you will say so explicitly with a borrow (next lesson) or a shared pointer like <Term id="rc">`Rc`</Term> (intermediate track).
+In TypeScript, assigning an object or an array creates an **<Term id="aliasing">alias</Term>**: two names for the same object, either of which can modify it. Rust's move semantics mean there is never silent aliasing of owned data. When you do want two names to see the same data, you will say so explicitly with a borrow (next lesson) or a shared pointer like <Term id="rc">`Rc`</Term> (intermediate track).
 
-<Callout type="compare" from="C++">
-A Rust move is like `std::move` into a `unique_ptr`, with two differences. It is the **default**, not an opt-in. And the source is not left in a "valid but unspecified" moved-from state that you can still touch: the compiler forbids any further use, so there is no moved-from state to reason about at all.
+<Callout type="compare" from="TypeScript">
+TypeScript has one operation that behaves like a move: transferring an `ArrayBuffer` to a worker with `postMessage(buf, [buf])`. The bytes are not copied, and the sender is left holding a detached buffer of length 0. Rust does this for every owning value, by **default**, and checks it at compile time: there is no detached state to test for, because any later use of the source does not compile.
 </Callout>
 
 ## Copy and Clone
 
 Moving an `i32` would be silly: there is nothing on the heap to protect. Types that are just plain bits implement the <Term id="copy">`Copy`</Term> <Term id="trait">trait</Term>, and for them assignment duplicates the value and keeps the original usable.
 
-`Copy` types include all integers and floats, `bool`, `char`, <Term id="shared-reference">shared references `&T`</Term>, and tuples or arrays whose elements are all `Copy`. A type that owns a resource (`String`, <Term id="vec">`Vec`</Term>, <Term id="box">`Box`</Term>, a file handle) can never be `Copy`.
+`Copy` types include all integers and floats, `bool`, `char`, <Term id="shared-reference">shared references `&T`</Term>, and tuples or arrays whose elements are all `Copy`. A type that owns a resource (`String`, <Term id="vec">`Vec`</Term>, <Term id="box">`Box`</Term>, a file handle) can never be `Copy`. TypeScript draws a similar line between primitives and objects, but there the language draws it once for all; in Rust it is a property of each type, and your own structs can opt in, like `Point` below.
 
-For everything else there is `Clone`: an explicit `.clone()` call that may allocate and copy as much as needed.
+For everything else there is `Clone`: an explicit `.clone()` call that may allocate and copy as much as needed. It is the counterpart of `structuredClone(value)`, not of the spread `{ ...value }`, which copies one level and shares the rest.
 
 <Playground title="Copy vs Clone">
 ```rust
@@ -154,7 +154,7 @@ Passing ownership back and forth works, but it gets tedious: imagine every funct
 
 ## Drop: deterministic cleanup
 
-When an owner goes out of scope, Rust calls `drop` on the value. For `String` and `Vec`, that frees the heap buffer. For a `File`, it closes the descriptor. For a `MutexGuard`, it unlocks the mutex. This is **<Term id="raii">RAII</Term>**, as in C++, but enforced by the ownership rules so that each resource is released exactly once.
+When an owner goes out of scope, Rust calls `drop` on the value. For `String` and `Vec`, that frees the heap buffer. For a `File`, it closes the descriptor. For a `MutexGuard`, it unlocks the mutex. This is **<Term id="raii">RAII</Term>**, and TypeScript has no dependable counterpart: the garbage collector runs when it likes, so cleanup there means `try`/`finally` or, since TypeScript 5.2, a `using` declaration that calls `[Symbol.dispose]()` at the end of the block. In Rust every value behaves as if it were declared with `using`, and the ownership rules guarantee that each resource is released exactly once.
 
 <Playground title="Drop order">
 ```rust
@@ -192,18 +192,17 @@ The compiler inserts drop calls during <Term id="mir">MIR</Term> construction, a
 
 ```rust
 struct Expense {
-    cents: i64,
+    cents: u64,
     category: String, // owned, not &str
-    note: String,
 }
 ```
 
-The loader reads the whole file into one `String`, and each line is a borrowed view into it. If `Expense` stored `&str` slices of that buffer, the buffer would have to stay alive as long as any expense does. Owning the strings is simpler: each record copies its category and note once, while loading, and the file buffer is dropped as soon as the loader returns.
+The loader reads the whole file into one `String`, and each line is a borrowed view into it. If `Expense` stored `&str` slices of that buffer, the buffer would have to stay alive as long as any expense does. Owning the strings is simpler: each record copies its category once, while loading, and the file buffer is dropped as soon as the loader returns.
 
 ```rust
 // simplified; the real version handles errors with `?`, from the error-handling lesson
-fn load(path: &str) -> Vec<Expense> {
-    let text = std::fs::read_to_string(path).unwrap(); // owns the whole file
+fn load() -> Vec<Expense> {
+    let text = std::fs::read_to_string("ledger.csv").unwrap(); // owns the whole file
     let mut expenses = Vec::new();
     for line in text.lines() {
         // each `line` borrows from `text`; from_line copies what it keeps

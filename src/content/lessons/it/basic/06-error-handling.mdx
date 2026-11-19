@@ -5,7 +5,7 @@ duration: 25
 tags: [Result, Option, "operatore ?", panic, trait Error]
 ---
 
-Rust non ha eccezioni. Una funzione che può fallire lo dichiara nel suo **tipo di ritorno**, e il chiamante deve fare qualcosa con il fallimento prima di poter accedere al valore. Per circa una settimana sembra prolisso; dopo, la maggior parte degli sviluppatori fa fatica a tornare a non sapere quali chiamate possono lanciare eccezioni.
+Rust non ha eccezioni. Una funzione che può fallire lo dichiara nel suo **tipo di ritorno**, e il chiamante deve fare qualcosa con il fallimento prima di poter accedere al valore. Per circa una settimana sembra prolisso; dopo, la maggior parte degli sviluppatori fa fatica a tornare a non sapere quali chiamate possono lanciare eccezioni. In TypeScript niente in `function parse(text: string): Config` dice che può lanciare un'eccezione, e il `catch (e)` che riceve il fallimento ottiene un `unknown`.
 
 ## Due tipi di fallimento
 
@@ -72,6 +72,8 @@ Essendo semplici valori puoi memorizzarli, metterli in un <Term id="vec">`Vec`</
 | `ok()` | `Result` | Scarta l'errore, tiene un `Option` |
 | `map_err(f)` | `Result` | Trasforma o arricchisce l'errore |
 
+Se usi l'optional chaining ne conosci già due: `user?.name` è `map`, e `value ?? fallback` è `unwrap_or`.
+
 <Playground title="Combinatori invece di controlli annidati">
 ```rust
 fn main() {
@@ -106,19 +108,14 @@ Due dettagli nascosti in quell'espansione sono importanti:
 1. `?` si può usare solo dentro una funzione che a sua volta restituisce `Result` (oppure `Option`, per i valori `Option`). La propagazione è visibile in ogni firma lungo il percorso.
 2. L'errore passa per <Term id="from-into">`From::from`</Term> prima di essere restituito. È così che un `ParseIntError` di basso livello diventa il tipo di errore della tua applicazione senza alcuna conversione esplicita nel punto di chiamata.
 
-<Compare left="Go">
-```go
-func loadConfig(path string) (*Config, error) {
-    text, err := readFile(path)
-    if err != nil {
-        return nil, err
-    }
-    raw, err := parseToml(text)
-    if err != nil {
-        return nil, err
-    }
-    return validate(raw)
+<Compare left="TypeScript">
+```ts
+function loadConfig(path: string): Config {
+  const text = readFile(path);  // può lanciare
+  const raw = parseToml(text);  // può lanciare
+  return validate(raw);         // può lanciare
 }
+// niente nella firma parla di fallimenti
 ```
 
 ```rust
@@ -131,7 +128,7 @@ fn load_config(path: &str) -> Result<Config, AppError> {
 ```
 </Compare>
 
-La semantica è la stessa dei controlli espliciti di Go, con una differenza che conta: in Go puoi dimenticarti di guardare `err` e usare un `text` nil; in Rust `text` non esiste finché il `Result` non è stato aperto.
+Le due versioni sono ugualmente brevi ed entrambe si fermano al primo fallimento. Cambia quello che si vede: in TypeScript nessuna chiamata è segnata come fallibile e l'errore arriva nel `catch` come `unknown`; in Rust ogni `?` è un punto di uscita visibile, la firma dichiara il tipo dell'errore, e `text` non esiste finché il `Result` non è stato aperto.
 
 ## Progettare i tipi di errore
 
@@ -237,20 +234,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 Due <Term id="crate">crate</Term> coprono quasi tutte le esigenze reali. **<Term id="thiserror">thiserror</Term>** genera il codice ripetitivo di `Display`, `Error` e `From` per un enum di errori di una libreria a partire da <Term id="attribute">attributi</Term> come `#[error("missing key {0}")]` e `#[from]`. **<Term id="anyhow">anyhow</Term>** offre `anyhow::Result<T>`, un `Box<dyn Error>` migliore che permette di aggiungere contesto: `read(path).with_context(|| format!("reading {path}"))?`. La regola pratica: thiserror per le librerie, i cui chiamanti devono fare match sugli errori; anyhow per le applicazioni, che per lo più devono solo segnalarli.
 </Callout>
 
-<Callout type="compare" from="Java / Python">
-Le checked exception di Java cercavano di mettere i fallimenti nelle firme, ma si propagavano implicitamente e non si potevano astrarre in modo generico. In Python e JavaScript le eccezioni sono del tutto invisibili nelle firme. L'approccio di Rust è più vicino ai linguaggi funzionali: gli errori sono valori, la propagazione è esplicita ma lunga un solo carattere, e il sistema dei tipi sa esattamente quali errori possono arrivare in ogni punto.
+<Callout type="compare" from="TypeScript">
+TypeScript non può tipizzare ciò che una funzione lancia: non esiste una clausola `throws`, un valore catturato è `unknown`, e nemmeno una `Promise<T>` rifiutata porta con sé un tipo di errore. I team che vogliono i fallimenti nelle firme restituiscono una union come `{ ok: true; value: T } | { ok: false; error: E }`. Quella union è `Result<T, E>`, che Rust include nella libreria standard insieme a `?` per propagarlo e a un warning del compilatore quando ne ignori uno.
 </Callout>
 
 ## Verso il progetto
 
-`ledger` può fallire in quattro modi diversi, che meritano trattamenti diversi: l'utente ha scritto qualcosa di non valido, una riga del file dati è corrotta, un totale è andato in overflow, oppure il sistema operativo ha rifiutato di aprire il file. Il programma finale li riunisce in un unico enum di errore, seguendo l'impostazione di questa lezione:
+`ledger` può fallire in tre modi diversi, che meritano trattamenti diversi: l'utente ha scritto qualcosa di non valido, una riga del file dati è corrotta, oppure il sistema operativo ha rifiutato di aprire il file. Il programma finale li riunisce in un unico enum di errore, seguendo l'impostazione di questa lezione:
 
 ```rust
 #[derive(Debug)]
 enum LedgerError {
     Usage(String),                           // argomenti sbagliati: stampa anche l'aiuto
     Corrupt { line: usize, reason: String }, // indica quale riga del file è rotta
-    Overflow,                                // un totale non sta in un i64
     Io(io::Error),                           // From<io::Error> permette a `?` di convertirlo
 }
 ```

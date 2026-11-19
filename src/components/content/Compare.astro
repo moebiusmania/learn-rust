@@ -19,7 +19,9 @@ const { left, right = 'Rust' } = Astro.props;
   .compare {
     container-type: inline-size;
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    /* Equal tracks, implicit on purpose: a container cannot restyle itself from its own
+       @container query, so the second column must not depend on one. */
+    grid-auto-columns: minmax(0, 1fr);
     gap: 0 var(--space-3);
     margin-block: var(--space-6);
   }
@@ -37,7 +39,6 @@ const { left, right = 'Rust' } = Astro.props;
   .lbl-right { grid-row: 3; }
   .compare > :global(pre:nth-of-type(2)) { grid-row: 4; }
   @container (width >= 40rem) {
-    .compare { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .lbl-left, .lbl-right { grid-row: 1; }
     .lbl-right { grid-column: 2; }
     .compare > :global(pre:nth-of-type(1)), .compare > :global(pre:nth-of-type(2)) { grid-row: 2; }

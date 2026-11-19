@@ -21,7 +21,7 @@ let n = count_words(&title);     // borrow
 println!("{title} has {n} words"); // title is still ours
 ```
 
-Through a `&T` you can read but not modify. You can create as many shared references as you like at the same time: readers do not interfere with each other.
+Through a `&T` you can read but not modify. You can create as many shared references as you like at the same time: readers do not interfere with each other. In TypeScript every object is already handled through a reference, and anyone holding one may mutate it; `readonly` and `Readonly<T>` only restrict your own view. A Rust `&T` is a guarantee about the value itself: while it exists, nobody can change it.
 
 ## Mutable references: `&mut T`
 
@@ -78,7 +78,7 @@ fn main() {
 ```
 </Playground>
 
-`push` may need more <Term id="capacity">capacity</Term>, in which case it allocates a bigger buffer, copies the elements and frees the old one. `first` would then point to freed memory. In C++ the equivalent code with `std::vector` compiles and is <Term id="ub">undefined behaviour</Term>. Rust reports `cannot borrow v as mutable because it is also borrowed as immutable`. Move the `println!` above the `push` and it compiles.
+`push` may need more <Term id="capacity">capacity</Term>, in which case it allocates a bigger buffer, copies the elements and frees the old one. `first` would then point to freed memory. In TypeScript the question never arises: `const first = v[0]` copies the number or, for an object, keeps it alive through the <Term id="garbage-collector">garbage collector</Term>. Without a collector, a pointer into a freed buffer would be <Term id="ub">undefined behaviour</Term>, so Rust refuses the program and reports `cannot borrow v as mutable because it is also borrowed as immutable`. Move the `println!` above the `push` and it compiles.
 
 <Callout type="runtime">
 References are plain machine pointers, with no reference count, no lock and no runtime bookkeeping: the borrow checker runs at compile time on <Term id="mir">MIR</Term> and then disappears. As a bonus, the guarantee that a `&mut T` is never aliased lets <Term id="rustc">rustc</Term> tell <Term id="llvm">LLVM</Term> that the pointer is <Term id="noalias">`noalias`</Term>, which unlocks optimizations that C compilers can only apply when you promise `restrict`.
@@ -92,16 +92,16 @@ In practice this means you can often fix a borrow error by *reordering* code: fi
 
 ## Iterator invalidation, ruled out
 
-Modifying a collection while iterating over it is a classic bug in every language. What differs is when you find out.
+Modifying a collection while iterating over it is a classic bug in every language. What differs is whether, and when, you find out.
 
-<Compare left="Java">
-```java
-List<Integer> v = new ArrayList<>(List.of(1, 2, 3));
-for (Integer x : v) {
-    if (x == 2) v.add(20);
+<Compare left="TypeScript">
+```ts
+const v = [1, 2, 3];
+for (const x of v) {
+  if (x === 2) v.push(20);
 }
-// runtime: ConcurrentModificationException
-// (C++: undefined behaviour, no message at all)
+// no error: the loop goes on to visit 20 as well;
+// push on every element and it never ends
 ```
 
 ```rust
@@ -114,7 +114,7 @@ for x in &v {
 ```
 </Compare>
 
-The `for` loop holds a shared borrow of `v` for its whole duration, so `push` cannot get the exclusive borrow it needs. Java detects it at runtime with a modification counter that every `ArrayList` carries; C++ does not detect it at all. Rust needs no counter, because the program never gets built. The fix is to make the two phases explicit:
+The `for` loop holds a shared borrow of `v` for its whole duration, so `push` cannot get the exclusive borrow it needs. TypeScript accepts the code, and what happens is decided at runtime: the array iterator re-reads `length` at every step, so the loop sees what you add (possibly forever) and skips elements when you `splice` behind it. Rust needs no runtime rule, because the program never gets built. The fix is to make the two phases explicit:
 
 <Playground title="Collect first, then mutate">
 ```rust
@@ -153,13 +153,13 @@ fn dangle() -> &String {
 
 A function that creates a value cannot return a reference to it: return the owned `String` instead, and let the caller own it. The general mechanism behind this check, **<Term id="lifetime">lifetimes</Term>**, is the subject of a lesson in the intermediate track; for now remember that a returned reference must point into one of the inputs.
 
-<Callout type="compare" from="Go">
-Go's <Term id="escape-analysis">escape analysis</Term> silently moves `s` to the <Term id="heap">heap</Term> so that `&s` stays valid, and the <Term id="garbage-collector">garbage collector</Term> frees it later. Rust never changes where a value lives behind your back: it rejects the reference and asks you to decide who owns the data.
+<Callout type="compare" from="TypeScript">
+The same function in TypeScript just works: objects live on the <Term id="heap">heap</Term> and the garbage collector keeps them alive for as long as anything can reach them, which is also why a closure can go on using the locals of a function that has returned. Rust never extends the life of a value behind your back: it rejects the reference and asks you to decide who owns the data.
 </Callout>
 
 ## Slices: borrowing part of a collection
 
-A **slice** is a reference to a contiguous range of elements: `&[T]` for arrays and vectors, `&str` for strings. It is a *<Term id="fat-pointer">fat pointer</Term>*: an address plus a length, 16 bytes on 64-bit <Term id="target">targets</Term>.
+A **slice** is a reference to a contiguous range of elements: `&[T]` for arrays and vectors, `&str` for strings. It is a *<Term id="fat-pointer">fat pointer</Term>*: an address plus a length, 16 bytes on 64-bit <Term id="target">targets</Term>. Unlike `Array.prototype.slice()`, which copies the elements into a new array, a Rust slice copies nothing: it is a view, like `subarray()` on a typed array.
 
 <Playground title="Slices are borrows too">
 ```rust
@@ -192,13 +192,13 @@ Because `word` borrows from `sentence`, calling `sentence.clear()` *while `word`
 Most functions in `ledger` only need to *look at* data, and their signatures say so. These are the real signatures from the final program:
 
 ```rust
-fn load(path: &str) -> Result<Vec<Expense>, LedgerError>
-fn append(path: &str, expense: &Expense) -> Result<(), LedgerError>
+fn load() -> Result<Vec<Expense>, LedgerError>
+fn append(expense: &Expense) -> Result<(), LedgerError>
 fn print_list(expenses: &[Expense], category: Option<&str>)
-fn totals_by_category(expenses: &[Expense]) -> Option<Vec<(&str, i64)>>
+fn totals_by_category(expenses: &[Expense]) -> Vec<(&str, u64)>
 ```
 
-- `load` borrows the path and returns **owned** data: the caller gets a `Vec` it can keep.
+- `load` returns **owned** data: the caller gets a `Vec` it can keep.
 - `append` borrows the expense it writes, so the caller can still print it afterwards.
 - The reports take `&[Expense]`, a slice, not `&Vec<Expense>`: they read everything and own nothing.
 - `totals_by_category` returns `&str` category names that point **into** `expenses`, so no name is copied. The borrow checker ties the result to the input: the expenses cannot be dropped or modified while the totals are still in use.

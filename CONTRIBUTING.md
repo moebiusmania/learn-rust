@@ -104,7 +104,9 @@ The *<Term id="borrow-checker">borrow checker</Term>* enforces one rule.
 
 - Audience: experienced developers coming from other languages. Do not explain what a
   loop, a function or a variable is. Explain what is *different* in Rust and *why*.
-- Compare with JavaScript/TypeScript, Python, Java/C#, Go and C/C++ where it helps.
+- The basic track has one baseline language, TypeScript: every `<Compare>` block and
+  `type="compare"` callout there compares Rust with TypeScript. The other tracks may also
+  compare with Python, Java/C#, Go and C/C++ where it helps.
 - Mention the runtime/compiler angle ("under the hood") when relevant.
 - No gamification: no points, scores, badges, streaks or "level up" language.
 - Italian: natural technical Italian. Keep established English terms (ownership,

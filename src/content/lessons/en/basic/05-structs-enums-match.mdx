@@ -19,11 +19,11 @@ A `struct` is a plain aggregate of fields. It has no hidden header, no vtable po
 
 Behaviour is attached with one or more `impl` blocks, separate from the data definition. The first parameter of a <Term id="method">method</Term>, the **<Term id="receiver">receiver</Term>**, says what the method does with the value, and that is part of the API contract:
 
-| Receiver | Meaning | Closest equivalent |
+| Receiver | Meaning | In a TypeScript class |
 | --- | --- | --- |
-| `&self` | Reads the value through a <Term id="shared-reference">shared borrow</Term> | A `const` method in C++ |
-| `&mut self` | Mutates the value through an <Term id="mutable-reference">exclusive borrow</Term> | A regular method on a mutable object |
-| `self` | <Term id="move">Consumes</Term> the value: the caller cannot use it afterwards | No common equivalent |
+| `&self` | Reads the value through a <Term id="shared-reference">shared borrow</Term> | A method that only reads `this` |
+| `&mut self` | Mutates the value through an <Term id="mutable-reference">exclusive borrow</Term> | A method that modifies `this` |
+| `self` | <Term id="move">Consumes</Term> the value: the caller cannot use it afterwards | No equivalent |
 | *(none)* | <Term id="associated-function">Associated function</Term>, called as `Type::name()` | A `static` method |
 
 There are no constructors. By convention an associated function called `new` (or something more descriptive) builds the value, and <Term id="self-type">`Self`</Term> is an alias for the type being implemented.
@@ -82,15 +82,15 @@ fn main() {
 ```
 </Playground>
 
-Uncomment the last <Term id="macro">`println!`</Term> of `r` to see the compiler reject a use after `into_tuple` consumed it. <Term id="derive">`#[derive(Debug, Clone, PartialEq)]`</Term> asks the compiler to generate the boilerplate implementations for printing, deep copying and comparing: nothing is implemented implicitly, not even equality.
+Uncomment the last <Term id="macro">`println!`</Term> of `r` to see the compiler reject a use after `into_tuple` consumed it. <Term id="derive">`#[derive(Debug, Clone, PartialEq)]`</Term> asks the compiler to generate the boilerplate implementations for printing, deep copying and comparing: nothing is implemented implicitly, not even equality. In TypeScript `a === b` on two objects compares identity; in Rust `==` compares the fields, and only because `PartialEq` was derived.
 
 <Callout type="runtime">
-A method call is just a function call with nicer syntax: `r.area()` compiles to `Rectangle::area(&r)`, resolved statically. There is no <Term id="dynamic-dispatch">dynamic dispatch</Term> unless you explicitly ask for it with trait objects (intermediate track). Unlike Java or C#, values have **no object header**: an <Term id="array">array</Term> of a million `Rectangle`s is 8 MB of contiguous `u32` pairs, with no per-object allocation and no pointer chasing.
+A method call is just a function call with nicer syntax: `r.area()` compiles to `Rectangle::area(&r)`, resolved statically. There is no <Term id="dynamic-dispatch">dynamic dispatch</Term> unless you explicitly ask for it with trait objects (intermediate track). Unlike a JavaScript object, a struct has **no object header** and no hidden class: an <Term id="array">array</Term> of a million `Rectangle`s is 8 MB of contiguous `u32` pairs, where a TypeScript `Rectangle[]` is an array of pointers to a million separately allocated objects.
 </Callout>
 
 ## Enums are algebraic data types
 
-In C, Java or TypeScript an `enum` is a set of named constants. In Rust each <Term id="variant">variant</Term> can carry its **own data**, with its own shape. This is a *<Term id="sum-type">sum type</Term>*: a `Message` is exactly one of these variants, and which one is recorded in a small hidden <Term id="discriminant">tag</Term>.
+A TypeScript `enum` is a set of named constants. A Rust `enum` is closer to a discriminated union: each <Term id="variant">variant</Term> can carry its **own data**, with its own shape. This is a *<Term id="sum-type">sum type</Term>*: a `Message` is exactly one of these variants, and which one is recorded in a small hidden <Term id="discriminant">tag</Term>.
 
 <Compare left="TypeScript">
 ```ts
@@ -129,7 +129,7 @@ fn describe(m: &Message) -> String {
 ```
 </Compare>
 
-The TypeScript version is a convention enforced by the type checker on top of plain objects. In Rust the tag is part of the value, the payload can only be reached by <Term id="match">matching</Term> on it, and the size of the enum is the size of its largest variant plus the tag.
+The TypeScript version is a convention enforced by the type checker on top of plain objects, and it is erased at runtime: a JSON payload asserted `as Message` is trusted whatever it contains. In Rust the tag is part of the value, the payload can only be reached by <Term id="match">matching</Term> on it, and the size of the enum is the size of its largest variant plus the tag.
 
 ### Option instead of null
 
@@ -143,6 +143,8 @@ enum Option<T> {
 ```
 
 A function that may not find a user returns <Term id="option">`Option<&str>`</Term>, not a <Term id="str">`&str`</Term> that might secretly be null. You *cannot* call string methods on an `Option<&str>`: you have to decide what happens in the `None` case first, by matching or with helpers like `unwrap_or`, `map` and <Term id="question-mark">`?`</Term> (next lesson).
+
+With `strictNullChecks`, TypeScript gives you the same discipline through `T | null` and `T | undefined`, and narrowing plays the role of the match. One difference remains: unions flatten, `Option` nests. The `get` of a `Map<string, number | undefined>` cannot tell a missing key from a stored `undefined`, while the Rust equivalent returns an `Option<Option<i32>>` in which `None` and `Some(None)` are distinct values.
 
 <Playground title="Enums with data and Option">
 ```rust
@@ -209,7 +211,7 @@ The last line prints the same size twice. A <Term id="reference">reference</Term
 
 <MatchExhaustiveness />
 
-This is what makes enums so useful for modelling states. Add a `Message::Resize` variant next month and the compiler lists every `match` in the codebase that needs updating. A `switch` with a `default` branch in Java or a missing `case` in JavaScript would silently do the wrong thing instead.
+This is what makes enums so useful for modelling states. Add a `Message::Resize` variant next month and the compiler lists every `match` in the codebase that needs updating. TypeScript checks this only when you ask: a `switch` over a union needs a declared return type or a `default` branch that assigns to `never`, and without them a missing `case` silently falls through.
 
 The analysis works on any type, not only enums. The compiler reasons about integer ranges too:
 
@@ -310,8 +312,8 @@ fn main() {
 ```
 </Playground>
 
-<Callout type="compare" from="Java / C#">
-Modern Java (sealed interfaces + records + pattern matching for `switch`) and C# (records + switch expressions) are converging on the same idea. The difference is that in Rust this is the *default* way to model data, the standard library is built on it (`Option`, <Term id="result">`Result`</Term>, `Ordering`, `Cow`), and enums are <Term id="stack">stack</Term> values with no allocation per variant.
+<Callout type="compare" from="TypeScript">
+Discriminated unions with narrowing are the same modelling tool, which is why the TypeScript version above translates almost line by line. Three things differ. A pattern does more than narrow: it destructures nested data, binds names and tests ranges and guards in a single construct. In Rust this is the *default* way to model data, and the standard library is built on it (`Option`, <Term id="result">`Result`</Term>, `Ordering`, `Cow`). And enums are <Term id="stack">stack</Term> values, with no object allocated per variant.
 </Callout>
 
 ## Building toward the project

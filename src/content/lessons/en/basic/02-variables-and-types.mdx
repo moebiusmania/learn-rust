@@ -21,7 +21,7 @@ fn main() {
 ```
 </Playground>
 
-The compiler answers with `error[E0384]: cannot assign twice to immutable variable` and suggests `let mut count`. This is the opposite of JavaScript, where `let` is mutable and you opt into `const`.
+The compiler answers with `error[E0384]: cannot assign twice to immutable variable` and suggests `let mut count`. This is the opposite of TypeScript, where `let` is mutable and you opt into `const`.
 
 <Compare left="TypeScript">
 ```ts
@@ -95,22 +95,22 @@ You never need to memorise the limits: every type exposes them as constants, suc
 
 Floats are `f32` and `f64` (the default), `bool` is one byte, and <Term id="char">`char`</Term> is a 4-byte **<Term id="unicode-scalar-value">Unicode scalar value</Term>**, not a byte and not a <Term id="utf-16">UTF-16</Term> unit. Strings are <Term id="utf-8">UTF-8</Term>, so `'é'.len_utf8()` is 2 while `size_of::<char>()` is 4.
 
-### Coming from JavaScript: where did `number` go?
+### Coming from TypeScript: where did `number` go?
 
-JavaScript has only two numeric types, and both make a different trade-off from Rust's:
+TypeScript inherits JavaScript's two numeric types, and both make a different trade-off from Rust's:
 
 - **`number`** is a 64-bit IEEE-754 float, exactly Rust's `f64`. Whole numbers in it are exact only up to `Number.MAX_SAFE_INTEGER` (2⁵³ − 1, about 9 × 10¹⁵); beyond that they silently round. The bitwise operators quietly convert to a 32-bit signed integer first, which is why `2 ** 31 | 0` is `-2147483648`.
 - **`bigint`** is an arbitrary-precision integer allocated on the heap. It never overflows, but every operation is a function call over a variable-length buffer, and it cannot be mixed with `number` without an explicit conversion.
 
-Rust instead offers many fixed-size types that map directly onto CPU registers. Arithmetic on them is a single machine instruction, a `u8` takes one byte in a struct or an array instead of eight, and the type documents (and the compiler enforces) which values are possible. If you have used JS **typed arrays**, you already know these types: `Uint8Array`, `Int32Array`, `Float32Array` and `BigInt64Array` store `u8`, `i32`, `f32` and `i64` values.
+Rust instead offers many fixed-size types that map directly onto CPU registers. Arithmetic on them is a single machine instruction, a `u8` takes one byte in a struct or an array instead of eight, and the type documents (and the compiler enforces) which values are possible. If you have used **typed arrays**, you already know these types: `Uint8Array`, `Int32Array`, `Float32Array` and `BigInt64Array` store `u8`, `i32`, `f32` and `i64` values.
 
-<Compare left="JavaScript">
-```js
-const price = 19.99;              // number (a 64-bit float)
-const count = 3;                  // number (still a float, just whole)
-const bytes = new Uint8Array(4);  // four u8 values
-const id = 9007199254740993n;     // must be bigint: as a number it would round
-2 ** 53 + 1 === 2 ** 53;          // true: precision silently lost
+<Compare left="TypeScript">
+```ts
+const price: number = 19.99;          // a 64-bit float
+const count: number = 3;              // still a float, just whole
+const bytes = new Uint8Array(4);      // four u8 values
+const id: bigint = 9007199254740993n; // as a number it would round
+2 ** 53 + 1 === 2 ** 53;              // true: precision silently lost
 ```
 
 ```rust
@@ -122,7 +122,7 @@ let id: u64 = 9_007_199_254_740_993;     // fits in a u64 and stays exact
 ```
 </Compare>
 
-`f64` behaves exactly like a JS `number`: `0.1 + 0.2 != 0.3`, `1.0 / 0.0` is `inf` and `0.0 / 0.0` is `NaN`. Two differences catch JS developers. First, integers and floats are different types: `2` is an integer and `2.0` a float, so `let x: f64 = 2;` does not compile, and **integer** division by zero panics instead of producing `Infinity`. Second, because `NaN != NaN`, floats have no total order: a `Vec<f64>` cannot be sorted with plain `.sort()` (use `.sort_by(|a, b| a.total_cmp(b))`) and floats cannot be `HashMap` keys.
+`f64` behaves exactly like a TypeScript `number`: `0.1 + 0.2 != 0.3`, `1.0 / 0.0` is `inf` and `0.0 / 0.0` is `NaN`. Two differences catch TypeScript developers. First, integers and floats are different types: `2` is an integer and `2.0` a float, so `let x: f64 = 2;` does not compile, and **integer** division by zero panics instead of producing `Infinity`. Second, because `NaN != NaN`, floats have no total order: a `Vec<f64>` cannot be sorted with plain `.sort()` (use `.sort_by(|a, b| a.total_cmp(b))`) and floats cannot be `HashMap` keys.
 
 ### Which type should I use?
 
@@ -130,7 +130,7 @@ let id: u64 = 9_007_199_254_740_993;     // fits in a u64 and stays exact
 - **Indexes, lengths, counts of things in memory**: `usize`. `Vec::len()` returns it and indexing requires it, so using it avoids conversions.
 - **Raw bytes, file contents, network data**: `u8`, usually as `&[u8]` or `Vec<u8>`.
 - **IDs, timestamps, file sizes, money in cents**: `i64` or `u64`. `Date.now()` already returns about 1.8 × 10¹², far beyond the 4.3 × 10⁹ of a `u32`.
-- **Fractional values**: `f64`, with the same caveats as in JS. Never use floats for money.
+- **Fractional values**: `f64`, with the same caveats as in TypeScript. Never use floats for money.
 - **Where you would reach for `bigint`**: `i128` or `u128` go up to about 10³⁸ with no allocation. For truly unbounded integers use a crate such as `num-bigint`.
 - **Signed or unsigned?** Unsigned types encode "cannot be negative" in the type, but subtraction becomes a trap: `a - b` with `b > a` overflows (see below). Prefer unsigned for sizes, bytes and bit masks, signed for quantities you compute differences of.
 
@@ -144,7 +144,7 @@ A literal gets its type from a suffix, from an annotation, or from how it is use
 let a = 42;                 // i32, nothing says otherwise
 let b = 42u8;               // the suffix picks the type
 let c: u64 = 42;            // ...or an annotation does
-let million = 1_000_000;    // underscores as separators, like JS
+let million = 1_000_000;    // underscores as separators, as in TypeScript
 let mask = 0xff_u8;         // hex, binary (0b1010) and octal (0o755) too
 let letter = b'A';          // byte literal: a u8 with value 65
 let x = 2.0;                // f64; plain `2` would be an integer
@@ -163,13 +163,13 @@ let half = 7 / 2;                      // 3: integer division
 let ratio = 7 as f64 / 2.0;            // 3.5: you must convert first
 ```
 
-<Callout type="compare" from="C / Java">
-`int + long` in C or Java silently widens; `byte b = 300` in some languages silently truncates. In Rust, adding a `u8` to a `u32` is a type error. Prefer <Term id="from-into">`into()`</Term> for conversions that cannot lose information and `try_from()` for those that can; reserve <Term id="as-cast">`as`</Term> for when you really want bit-level truncation or float/int casts.
+<Callout type="compare" from="TypeScript">
+With a single `number` type there is nothing to convert between, and where JavaScript does convert, it does so silently: storing 300 in a `Uint8Array` keeps 44, and `x | 0` truncates to 32 bits. Mind the false friend, too: TypeScript's `as` is a compile-time assertion that changes no bits, while Rust's <Term id="as-cast">`as`</Term> is a real conversion that runs. In Rust, adding a `u8` to a `u32` is a type error. Prefer <Term id="from-into">`into()`</Term> for conversions that cannot lose information and `try_from()` for those that can; reserve `as` for when you really want bit-level truncation or float/int casts.
 </Callout>
 
 ## Overflow is a decision you make
 
-Fixed-size types have a consequence that JavaScript's `number` hides: the result of an operation can be too large, or too small, to fit. `250u8 + 10` is 260, but a `u8` stops at 255. What should happen? C says <Term id="ub">undefined behaviour</Term> for signed types and "wrap" for unsigned ones; Java always wraps; Python and JS `bigint` grow the integer forever; JS `number` keeps going but silently loses precision past 2⁵³. Rust's answer is: **you choose, explicitly**, and the default `+` is treated as a bug if it <Term id="overflow">overflows</Term>.
+Fixed-size types have a consequence that TypeScript's `number` hides: the result of an operation can be too large, or too small, to fit. `250u8 + 10` is 260, but a `u8` stops at 255. What should happen? TypeScript never has to answer: `bigint` grows the integer forever, and `number` keeps going but silently loses precision past 2⁵³. C, which does have fixed-size integers, answers with <Term id="ub">undefined behaviour</Term> for signed types and "wrap" for unsigned ones. Rust's answer is: **you choose, explicitly**, and the default `+` is treated as a bug if it <Term id="overflow">overflows</Term>.
 
 ### What happens to the bits
 
@@ -187,7 +187,7 @@ Dropping the high bits that do not fit is the same as taking the result modulo 2
 
 Signed types use <Term id="twos-complement">two's complement</Term>: the same 8 bits, but the top bit is worth −128 instead of +128. So `0111_1111` is 127, and adding one gives `1000_0000`, which reads as −128: the largest positive value wraps around to the most negative one. That is why `i8::MIN.abs()` has no valid answer, since +128 does not fit.
 
-JavaScript wraps in a few places too, just not where you would look: `(2 ** 31) | 0` is `-2147483648`, `new Uint8Array([260])[0]` is `4`, and `BigInt.asUintN(8, 260n)` is `4n`. `Uint8ClampedArray`, the type behind canvas pixel data, does the opposite and **saturates**: storing 260 gives 255. Rust lets you pick either behaviour, per operation.
+TypeScript wraps in a few places too, just not where you would look: `(2 ** 31) | 0` is `-2147483648`, `new Uint8Array([260])[0]` is `4`, and `BigInt.asUintN(8, 260n)` is `4n`. `Uint8ClampedArray`, the type behind canvas pixel data, does the opposite and **saturates**: storing 260 gives 255. Rust lets you pick either behaviour, per operation.
 
 <IntegerExplorer />
 
@@ -219,7 +219,7 @@ fn main() {
 ```
 </Playground>
 
-In JavaScript, `[].length - 1` is `-1`, a value your code probably checks for. A `usize` cannot be −1: a debug build panics with `attempt to subtract with overflow`, while a release build produces `usize::MAX`, which fails much later (an index out of bounds, a loop that never ends) far from the real cause. Write what you mean instead: `items.len().checked_sub(1)` returns an `Option<usize>`, `items.last()` avoids the arithmetic entirely, and `a.abs_diff(b)` gives the distance between two unsigned values without caring which is larger.
+In TypeScript, `[].length - 1` is `-1`, a value your code probably checks for. A `usize` cannot be −1: a debug build panics with `attempt to subtract with overflow`, while a release build produces `usize::MAX`, which fails much later (an index out of bounds, a loop that never ends) far from the real cause. Write what you mean instead: `items.len().checked_sub(1)` returns an `Option<usize>`, `items.last()` avoids the arithmetic entirely, and `a.abs_diff(b)` gives the distance between two unsigned values without caring which is larger.
 
 A few rules do not depend on the build at all:
 
@@ -283,7 +283,7 @@ let n = "12".parse::<i64>()?;     // "turbofish" picks the target type
 let total: u32 = ids.iter().map(|&id| u32::from(id)).sum(); // annotation drives sum()
 ```
 
-Function signatures are never inferred: parameters and return types are always written out. That keeps type errors local and makes signatures readable documentation.
+Function signatures are never inferred: parameters and return types are always written out, where TypeScript happily infers a return type from the function body. That keeps type errors local and makes signatures readable documentation.
 
 ## Expressions everywhere
 
@@ -315,14 +315,12 @@ Try adding a semicolon after `x * x`: the function body now evaluates to `()`, a
 
 ## Building toward the project
 
-`ledger` records amounts of money, and this lesson decides how to store them. Floats are ruled out: `f64` cannot represent most decimal fractions exactly, and a ledger that drifts by a cent is a broken ledger. Instead, every amount is an **`i64` number of cents**: `12.50` is stored as `1250`, and the decimal point exists only when printing. Signed, because a refund is a negative expense; 64 bits, because the maximum is about 92 quadrillion.
+`ledger` records amounts of money, and this lesson decides how to store them. Floats are ruled out: `f64` cannot represent most decimal fractions exactly, and a ledger that drifts by a cent is a broken ledger. Instead, every amount is a **`u64` number of cents**: `12.50` is stored as `1250`, and the decimal point exists only when printing. Unsigned, because an expense cannot be negative; 64 bits, because the maximum is about 184 quadrillion.
 
 <Playground title="ledger: money as integer cents">
 ```rust
-fn format_cents(cents: i64) -> String {
-    let sign = if cents < 0 { "-" } else { "" };
-    let abs = cents.unsigned_abs(); // u64: unlike abs(), cannot overflow on i64::MIN
-    format!("{sign}{}.{:02}", abs / 100, abs % 100)
+fn format_cents(cents: u64) -> String {
+    format!("{}.{:02}", cents / 100, cents % 100)
 }
 
 fn main() {
@@ -331,27 +329,26 @@ fn main() {
     println!("as f64:   {float_total}");
 
     // Integer cents are exact; the decimal point exists only when printing
-    let lunch: i64 = 1250; // 12.50
-    let coffee: i64 = 820; // 8.20
-    let refund: i64 = -500; // -5.00: signed, because refunds are negative
-    let total = lunch + coffee + refund;
+    let lunch: u64 = 1250; // 12.50
+    let coffee: u64 = 820; // 8.20
+    let total = lunch + coffee;
     println!("as cents: {total} -> {}", format_cents(total));
 
     // Parsing "12.50" multiplies by 100: checked, because the input comes from a user
-    let whole: i64 = 92_233_720_368_547_759;
+    let whole: u64 = 999_999_999_999_999_999;
     println!("{:?}", whole.checked_mul(100)); // None: would overflow
-    println!("{}", format_cents(i64::MIN)); // abs() would panic here
+    println!("{:?}", 12u64.checked_mul(100)); // Some(1200)
 }
 ```
 </Playground>
 
-`format_cents` is the exact function used in the final program: an `if` expression picks the sign, `unsigned_abs` avoids the `i64::MIN` overflow trap, integer division and remainder split euros from cents, and `{:02}` pads to two digits. The parser that turns `"12.50"` into `1250` uses `checked_mul` and `checked_add`, because its input comes from the user and a huge number must become an error, not a panic or a silently wrapped value.
+`format_cents` is the exact function used in the final program: integer division and remainder split euros from cents, and `{:02}` pads the cents to two digits. The parser that turns `"12.50"` into `1250` uses `checked_mul` and `checked_add`, because its input comes from the user and a huge number must become an error, not a panic or a silently wrapped value.
 
 ## Key takeaways
 
 - `let` is immutable and deep; add `mut` only where state genuinely changes.
 - Shadowing creates a new binding, possibly of a new type: ideal for parse-and-refine steps.
-- JavaScript's `number` is Rust's `f64`; instead of `bigint`, Rust offers fixed-size integers from `i8` to `u128`, each naming its width and sign.
+- TypeScript's `number` is Rust's `f64`; instead of `bigint`, Rust offers fixed-size integers from `i8` to `u128`, each naming its width and sign.
 - Default to `i32` for integers, `usize` for indexes and lengths, `u8` for bytes and `i64`/`u64` for IDs and timestamps.
 - There are no implicit conversions. Use `into`, `try_from`, and `as` deliberately.
 - Overflow panics in debug and wraps in release; watch unsigned subtraction in particular. When overflow is expected, pick `wrapping_`, `checked_`, `saturating_` or `overflowing_` explicitly.

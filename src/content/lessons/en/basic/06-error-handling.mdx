@@ -5,7 +5,7 @@ duration: 25
 tags: [Result, Option, "? operator", panic, Error trait]
 ---
 
-Rust has no exceptions. A function that can fail says so in its **return type**, and the caller must do something with the failure before getting at the value. This feels verbose for about a week; after that, most developers find it hard to go back to not knowing which calls can throw.
+Rust has no exceptions. A function that can fail says so in its **return type**, and the caller must do something with the failure before getting at the value. This feels verbose for about a week; after that, most developers find it hard to go back to not knowing which calls can throw. In TypeScript nothing in `function parse(text: string): Config` says that it can throw, and the `catch (e)` that receives the failure gets an `unknown`.
 
 ## Two kinds of failure
 
@@ -72,6 +72,8 @@ Because they are plain values you can store them, put them in a <Term id="vec">`
 | `ok()` | `Result` | Discard the error, keep an `Option` |
 | `map_err(f)` | `Result` | Transform or enrich the error |
 
+If you use optional chaining you already know two of them: `user?.name` is `map`, and `value ?? fallback` is `unwrap_or`.
+
 <Playground title="Combinators instead of nested checks">
 ```rust
 fn main() {
@@ -106,19 +108,14 @@ Two details hidden in that expansion matter:
 1. `?` can only be used inside a function that itself returns `Result` (or `Option`, for `Option` values). Propagation is visible in every signature along the way.
 2. The error goes through <Term id="from-into">`From::from`</Term> before being returned. That is how a low-level `ParseIntError` becomes your application's error type without any explicit conversion at the call site.
 
-<Compare left="Go">
-```go
-func loadConfig(path string) (*Config, error) {
-    text, err := readFile(path)
-    if err != nil {
-        return nil, err
-    }
-    raw, err := parseToml(text)
-    if err != nil {
-        return nil, err
-    }
-    return validate(raw)
+<Compare left="TypeScript">
+```ts
+function loadConfig(path: string): Config {
+  const text = readFile(path);  // may throw
+  const raw = parseToml(text);  // may throw
+  return validate(raw);         // may throw
 }
+// nothing in the signature mentions failure
 ```
 
 ```rust
@@ -131,7 +128,7 @@ fn load_config(path: &str) -> Result<Config, AppError> {
 ```
 </Compare>
 
-Same semantics as Go's explicit checks, with one difference that matters: in Go you can forget to look at `err` and use a nil `text`; in Rust there is no `text` until the `Result` has been opened.
+Both versions are equally short and both stop at the first failure. What differs is what you can see: in TypeScript no call is marked as fallible and the error arrives in `catch` as `unknown`; in Rust every `?` is a visible exit point, the signature names the error type, and there is no `text` until the `Result` has been opened.
 
 ## Designing error types
 
@@ -237,20 +234,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 Two <Term id="crate">crates</Term> cover nearly all real-world needs. **<Term id="thiserror">thiserror</Term>** generates the `Display`, `Error` and `From` boilerplate of a library error enum from <Term id="attribute">attributes</Term> such as `#[error("missing key {0}")]` and `#[from]`. **<Term id="anyhow">anyhow</Term>** provides `anyhow::Result<T>`, a better `Box<dyn Error>` that can attach context: `read(path).with_context(|| format!("reading {path}"))?`. The rule of thumb: thiserror for libraries, whose callers need to match on errors; anyhow for applications, which mostly need to report them.
 </Callout>
 
-<Callout type="compare" from="Java / Python">
-Checked exceptions in Java tried to put failures in signatures but propagated implicitly and could not be abstracted over generically. Python and JavaScript exceptions are invisible in signatures entirely. Rust's approach is closer to functional languages: errors are values, propagation is explicit but one character long, and the type system knows exactly which errors can reach any given point.
+<Callout type="compare" from="TypeScript">
+TypeScript cannot type what a function throws: there is no `throws` clause, a caught value is `unknown`, and a rejected `Promise<T>` carries no error type either. Teams that want failures in their signatures return a union such as `{ ok: true; value: T } | { ok: false; error: E }`. That union is `Result<T, E>`, which Rust ships in the standard library together with `?` to propagate it and a compiler warning when you ignore one.
 </Callout>
 
 ## Building toward the project
 
-`ledger` can fail in four different ways, and they deserve different treatment: the user typed something invalid, a line of the data file is corrupted, a total overflowed, or the operating system refused to open the file. The final program gives them one error enum, following the design from this lesson:
+`ledger` can fail in three different ways, and they deserve different treatment: the user typed something invalid, a line of the data file is corrupted, or the operating system refused to open the file. The final program gives them one error enum, following the design from this lesson:
 
 ```rust
 #[derive(Debug)]
 enum LedgerError {
     Usage(String),                           // bad arguments: also print the help text
     Corrupt { line: usize, reason: String }, // say which line of the file is broken
-    Overflow,                                // a total does not fit in an i64
     Io(io::Error),                           // From<io::Error> lets `?` convert it
 }
 ```

@@ -5,7 +5,7 @@ duration: 25
 tags: [Vec, slices, String, "&str", UTF-8, HashMap]
 ---
 
-Three types cover most everyday data in Rust: <Term id="vec">`Vec<T>`</Term>, <Term id="string">`String`</Term> and <Term id="hashmap">`HashMap<K, V>`</Term>. None of them is special: they are ordinary library <Term id="struct">structs</Term> that own a <Term id="heap">heap</Term> buffer, so everything you learned about <Term id="ownership">ownership</Term> and <Term id="borrow">borrowing</Term> applies to them unchanged. What changes is how much of their memory behaviour you can now *see*.
+Three types cover most everyday data in Rust: <Term id="vec">`Vec<T>`</Term>, <Term id="string">`String`</Term> and <Term id="hashmap">`HashMap<K, V>`</Term>, in the roles that `T[]`, `string` and `Map<K, V>` play in TypeScript. None of them is special: they are ordinary library <Term id="struct">structs</Term> that own a <Term id="heap">heap</Term> buffer, so everything you learned about <Term id="ownership">ownership</Term> and <Term id="borrow">borrowing</Term> applies to them unchanged. What changes is how much of their memory behaviour you can now *see*.
 
 ## Vec: a growable array
 
@@ -45,10 +45,10 @@ fn main() {
 
 ### Slices: borrowed views
 
-`&[T]` is a **<Term id="slice">slice</Term>**: a pointer plus a length, borrowing a contiguous run of `T` that someone else owns. `&v[1..4]` borrows part of a vector, `&v` borrows all of it, and <Term id="array">arrays</Term> coerce the same way. A function that only reads a sequence should take `&[T]`, not `&Vec<T>`: it then accepts vectors, arrays and sub-ranges alike, at no cost.
+`&[T]` is a **<Term id="slice">slice</Term>**: a pointer plus a length, borrowing a contiguous run of `T` that someone else owns. `&v[1..4]` borrows part of a vector, `&v` borrows all of it, and <Term id="array">arrays</Term> coerce the same way. A function that only reads a sequence should take `&[T]`, not `&Vec<T>`: it then accepts vectors, arrays and sub-ranges alike, at no cost. Where `v.slice(1, 4)` in TypeScript allocates a new array, `&v[1..4]` allocates nothing.
 
 <Callout type="runtime" title="Why a push can invalidate references">
-A reallocation *moves* the elements to a new address. Any <Term id="reference">reference</Term> into the old buffer would now point to freed memory, which in C++ is the classic <Term id="iterator-invalidation">iterator-invalidation</Term> bug. In Rust, holding a <Term id="shared-reference">`&`</Term> into a `Vec` borrows the whole `Vec`, and `push` needs <Term id="mutable-reference">`&mut self`</Term>, so the two cannot overlap. The compiler rejects the bug before it exists:
+A reallocation *moves* the elements to a new address. Any <Term id="reference">reference</Term> into the old buffer would now point to freed memory: the classic <Term id="iterator-invalidation">iterator-invalidation</Term> bug of languages without a garbage collector. In Rust, holding a <Term id="shared-reference">`&`</Term> into a `Vec` borrows the whole `Vec`, and `push` needs <Term id="mutable-reference">`&mut self`</Term>, so the two cannot overlap. The compiler rejects the bug before it exists:
 </Callout>
 
 <Playground title="Modifying a Vec while iterating over it" expectError>
@@ -65,13 +65,13 @@ fn main() {
 ```
 </Playground>
 
-<Callout type="compare" from="Java / C++">
-Java detects this at runtime with a `ConcurrentModificationException`, when the loop happens to run. C++ does not detect it at all: it is <Term id="ub">undefined behaviour</Term>. Rust reports it at compile time as an ordinary borrow error (E0502). The fix is to collect changes first and apply them after the loop, or use <Term id="method">methods</Term> such as `retain`, `extend` or `iter().position()`.
+<Callout type="compare" from="TypeScript">
+The same loop in TypeScript runs without complaint: `for...of` re-reads the array's length at every step, so it goes on to visit the 25 it has just pushed, and a loop that pushes on every element never ends. Rust reports the problem at compile time as an ordinary borrow error (E0502). The fix is to collect changes first and apply them after the loop, or use <Term id="method">methods</Term> such as `retain` (an in-place `filter`), `extend` or `iter().position()`.
 </Callout>
 
 ## String and &str
 
-Rust has two main string types, and the split mirrors `Vec<T>` and `&[T]`:
+TypeScript has a single, immutable `string`, and the engine decides how it is stored and shared. Rust has two main string types, and the split mirrors `Vec<T>` and `&[T]`:
 
 | Type | What it is | Owns its data | Typical use |
 | --- | --- | --- | --- |
@@ -115,7 +115,7 @@ fn main() {
 
 ### Why s[0] does not compile
 
-In most languages `s[0]` returns "the first character". In Rust this is a compile error:
+In TypeScript `s[0]` returns the first <Term id="utf-16">UTF-16</Term> code unit as a one-character string, which usually is "the first character". In Rust this is a compile error:
 
 ```rust
 let s = String::from("hey");
@@ -129,13 +129,31 @@ The reason is that strings are UTF-8, a variable-width encoding: `è` is 2 bytes
 - `&s[a..b]` for a substring by **byte** range, which <Term id="panic">panics</Term> if `a` or `b` falls in the middle of a character.
 - Graphemes need a <Term id="crate">crate</Term> such as `unicode-segmentation`.
 
-<Callout type="compare" from="JavaScript / Python / Java">
-JavaScript and Java strings are <Term id="utf-16">UTF-16</Term> internally, so `"🦀".length` is 2 and indexing can split a character in half. Python 3 picks a fixed-width representation per string (1, 2 or 4 bytes per code point) to make indexing O(1), at the cost of memory and conversions. Rust stores UTF-8 everywhere, the same encoding as files and the network, and moves the cost to the rare places where you really need positional access.
+<Callout type="compare" from="TypeScript">
+TypeScript strings are UTF-16, so `"🦀".length` is 2 and `"🦀"[0]` is half a character, a lone surrogate. Iteration is the exception: `[..."🦀"]` has one element, because the string iterator walks code points, exactly like `.chars()` in Rust. Watch `len()` when porting code: `"è".length` is 1 in TypeScript, `"è".len()` is 2 in Rust, because it counts UTF-8 bytes. Rust stores UTF-8 everywhere, the same encoding as files and the network, so there is no `TextEncoder` step at the boundary, and the cost moves to the rare places where you really need positional access.
 </Callout>
 
 ## HashMap and the entry API
 
-`HashMap<K, V>` lives in `std::collections` and works with any key type that implements `Eq` and `Hash` (<Term id="derive">derivable</Term> for your own types). Lookups return <Term id="option">`Option<&V>`</Term> instead of `null` or a `KeyError`. The **<Term id="entry-api">entry API</Term>** handles the "insert if missing, then update" pattern with a single hash lookup, and without the double-borrow problem you would hit doing `get` followed by `insert`.
+`HashMap<K, V>` lives in `std::collections` and works with any key type that implements `Eq` and `Hash` (<Term id="derive">derivable</Term> for your own types). Keys are compared by value, so a tuple or a struct works as a key, where a TypeScript `Map` compares objects by identity and pushes you to build string keys. Lookups return <Term id="option">`Option<&V>`</Term> where `Map.get` returns `undefined`. The **<Term id="entry-api">entry API</Term>** handles the "insert if missing, then update" pattern with a single hash lookup, and without the double-borrow problem you would hit doing `get` followed by `insert`.
+
+<Compare left="TypeScript">
+```ts
+const counts = new Map<string, number>();
+for (const word of text.split(" ")) {
+  counts.set(word, (counts.get(word) ?? 0) + 1);
+}
+// two lookups per word: get, then set
+```
+
+```rust
+let mut counts: HashMap<&str, usize> = HashMap::new();
+for word in text.split(' ') {
+    *counts.entry(word).or_insert(0) += 1;
+}
+// one lookup per word: entry finds or inserts
+```
+</Compare>
 
 <Playground title="Counting words with entry">
 ```rust
@@ -168,7 +186,7 @@ fn main() {
 ```
 </Playground>
 
-Two defaults worth knowing: iteration order is **unspecified** (it changes between runs), and the default <Term id="hasher">hasher</Term>, SipHash 1-3, is chosen to resist <Term id="hash-flooding">hash-flooding</Term> attacks rather than for raw speed. Use <Term id="btreemap">`BTreeMap`</Term> when you need sorted keys, and a faster hasher such as `ahash` or `rustc-hash` when keys are not attacker-controlled.
+Two defaults worth knowing: iteration order is **unspecified** (it changes between runs, where a TypeScript `Map` iterates in insertion order), and the default <Term id="hasher">hasher</Term>, SipHash 1-3, is chosen to resist <Term id="hash-flooding">hash-flooding</Term> attacks rather than for raw speed. Use <Term id="btreemap">`BTreeMap`</Term> when you need sorted keys, and a faster hasher such as `ahash` or `rustc-hash` when keys are not attacker-controlled.
 
 ## Three ways to iterate
 
@@ -209,34 +227,32 @@ Iterating by value is not a performance trap: it moves each `String` out without
 
 ## Building toward the project
 
-The `summary` command of `ledger` is a word-count problem in disguise: instead of counting words, it adds up amounts per category. Everything it needs is in this lesson: `lines()` and `splitn` to read the data file, a `HashMap` with the entry API to accumulate the totals, and `sort_by` to order the result, since the map's iteration order is unspecified.
+The `summary` command of `ledger` is a word-count problem in disguise: instead of counting words, it adds up amounts per category. Everything it needs is in this lesson: `lines()` and `split_once` to read the data file, a `HashMap` with the entry API to accumulate the totals, and `sort_by` to order the result, since the map's iteration order is unspecified.
 
 <Playground title="ledger: totals per category">
 ```rust
 use std::collections::HashMap;
 
 fn main() {
-    // The ledger data file: cents,category,note (the note may contain commas)
-    let file = "1250,food,lunch, with Ada\n4500,transport,monthly pass\n820,food,coffee beans\n";
+    // The ledger data file: one `cents,category` line per expense
+    let file = "1250,food\n4500,transport\n820,food\n";
 
-    let mut totals: HashMap<&str, i64> = HashMap::new();
+    let mut totals: HashMap<&str, u64> = HashMap::new();
     for line in file.lines() {
-        let mut fields = line.splitn(3, ','); // at most 3 fields
-        let cents: i64 = fields.next().unwrap().parse().unwrap();
-        let category = fields.next().unwrap(); // &str borrowed from `file`
-        let note = fields.next().unwrap_or("");
-        println!("{cents:>6}  {category:<10} {note}");
+        let (cents, category) = line.split_once(',').unwrap(); // two &str borrowed from `file`
+        let cents: u64 = cents.parse().unwrap();
+        println!("{cents:>6}  {category}");
         *totals.entry(category).or_insert(0) += cents;
     }
 
-    let mut rows: Vec<(&str, i64)> = totals.into_iter().collect();
+    let mut rows: Vec<(&str, u64)> = totals.into_iter().collect();
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0))); // largest first, then by name
     println!("{rows:?}");
 }
 ```
 </Playground>
 
-Notice the key type: `HashMap<&str, i64>`. The keys borrow from the text instead of being copied into new `String`s. `splitn(3, ',')` stops after the second comma, so a note may contain commas of its own. The `unwrap()` calls are acceptable in a sketch; the final program replaces them with the error handling from the previous lesson, and reports the line number of a corrupted entry.
+Notice the key type: `HashMap<&str, u64>`. The keys borrow from the text instead of being copied into new `String`s. `split_once(',')` splits at the first comma only, so a category may contain commas of its own. The `unwrap()` calls are acceptable in a sketch; the final program replaces them with the error handling from the previous lesson, and reports the line number of a corrupted entry.
 
 That completes the toolbox. The next lesson puts all the pieces together.
 

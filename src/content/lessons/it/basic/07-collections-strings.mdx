@@ -5,7 +5,7 @@ duration: 25
 tags: [Vec, slice, String, "&str", UTF-8, HashMap]
 ---
 
-Tre tipi coprono la maggior parte dei dati di tutti i giorni in Rust: <Term id="vec">`Vec<T>`</Term>, <Term id="string">`String`</Term> e <Term id="hashmap">`HashMap<K, V>`</Term>. Nessuno di loro è speciale: sono normali <Term id="struct">struct</Term> di libreria che possiedono un buffer sullo <Term id="heap">heap</Term>, quindi tutto ciò che hai imparato su <Term id="ownership">ownership</Term> e <Term id="borrow">borrowing</Term> si applica senza modifiche. Quello che cambia è quanto del loro comportamento in memoria ora riesci a *vedere*.
+Tre tipi coprono la maggior parte dei dati di tutti i giorni in Rust: <Term id="vec">`Vec<T>`</Term>, <Term id="string">`String`</Term> e <Term id="hashmap">`HashMap<K, V>`</Term>, nei ruoli che in TypeScript hanno `T[]`, `string` e `Map<K, V>`. Nessuno di loro è speciale: sono normali <Term id="struct">struct</Term> di libreria che possiedono un buffer sullo <Term id="heap">heap</Term>, quindi tutto ciò che hai imparato su <Term id="ownership">ownership</Term> e <Term id="borrow">borrowing</Term> si applica senza modifiche. Quello che cambia è quanto del loro comportamento in memoria ora riesci a *vedere*.
 
 ## Vec: un array che cresce
 
@@ -45,10 +45,10 @@ fn main() {
 
 ### Slice: viste in prestito
 
-`&[T]` è uno **<Term id="slice">slice</Term>**: un puntatore più una lunghezza, che prende in prestito una sequenza contigua di `T` posseduta da qualcun altro. `&v[1..4]` prende in prestito una parte di un vettore, `&v` lo prende tutto, e gli <Term id="array">array</Term> si convertono allo stesso modo. Una funzione che legge soltanto una sequenza dovrebbe accettare `&[T]`, non `&Vec<T>`: così accetta vettori, array e sottointervalli, senza alcun costo.
+`&[T]` è uno **<Term id="slice">slice</Term>**: un puntatore più una lunghezza, che prende in prestito una sequenza contigua di `T` posseduta da qualcun altro. `&v[1..4]` prende in prestito una parte di un vettore, `&v` lo prende tutto, e gli <Term id="array">array</Term> si convertono allo stesso modo. Una funzione che legge soltanto una sequenza dovrebbe accettare `&[T]`, non `&Vec<T>`: così accetta vettori, array e sottointervalli, senza alcun costo. Dove `v.slice(1, 4)` in TypeScript alloca un nuovo array, `&v[1..4]` non alloca nulla.
 
 <Callout type="runtime" title="Perché un push può invalidare i riferimenti">
-Una riallocazione *sposta* gli elementi a un nuovo indirizzo. Qualsiasi <Term id="reference">riferimento</Term> al vecchio buffer punterebbe ora a memoria liberata: in C++ è il classico bug di <Term id="iterator-invalidation">invalidazione degli iteratori</Term>. In Rust, tenere un <Term id="shared-reference">`&`</Term> dentro un `Vec` significa prendere in prestito l'intero `Vec`, e `push` richiede <Term id="mutable-reference">`&mut self`</Term>, quindi le due cose non possono sovrapporsi. Il compilatore rifiuta il bug prima ancora che esista:
+Una riallocazione *sposta* gli elementi a un nuovo indirizzo. Qualsiasi <Term id="reference">riferimento</Term> al vecchio buffer punterebbe ora a memoria liberata: è il classico bug di <Term id="iterator-invalidation">invalidazione degli iteratori</Term> dei linguaggi senza garbage collector. In Rust, tenere un <Term id="shared-reference">`&`</Term> dentro un `Vec` significa prendere in prestito l'intero `Vec`, e `push` richiede <Term id="mutable-reference">`&mut self`</Term>, quindi le due cose non possono sovrapporsi. Il compilatore rifiuta il bug prima ancora che esista:
 </Callout>
 
 <Playground title="Modificare un Vec mentre lo si scorre" expectError>
@@ -65,13 +65,13 @@ fn main() {
 ```
 </Playground>
 
-<Callout type="compare" from="Java / C++">
-Java lo rileva a runtime con una `ConcurrentModificationException`, se il ciclo viene effettivamente eseguito. C++ non lo rileva affatto: è <Term id="ub">undefined behaviour</Term>. Rust lo segnala in compilazione come un normale errore di borrowing (E0502). La soluzione è raccogliere prima le modifiche e applicarle dopo il ciclo, oppure usare <Term id="method">metodi</Term> come `retain`, `extend` o `iter().position()`.
+<Callout type="compare" from="TypeScript">
+Lo stesso ciclo in TypeScript gira senza proteste: `for...of` rilegge la lunghezza dell'array a ogni passo, quindi prosegue fino a visitare il 25 appena aggiunto, e un ciclo che fa push a ogni elemento non finisce mai. Rust segnala il problema in compilazione come un normale errore di borrowing (E0502). La soluzione è raccogliere prima le modifiche e applicarle dopo il ciclo, oppure usare <Term id="method">metodi</Term> come `retain` (un `filter` sul posto), `extend` o `iter().position()`.
 </Callout>
 
 ## String e &str
 
-Rust ha due tipi di stringa principali, e la divisione rispecchia quella tra `Vec<T>` e `&[T]`:
+TypeScript ha un unico `string`, immutabile, ed è il motore a decidere come memorizzarlo e condividerlo. Rust ha due tipi di stringa principali, e la divisione rispecchia quella tra `Vec<T>` e `&[T]`:
 
 | Tipo | Cos'è | Possiede i dati | Uso tipico |
 | --- | --- | --- | --- |
@@ -115,7 +115,7 @@ fn main() {
 
 ### Perché s[0] non compila
 
-Nella maggior parte dei linguaggi `s[0]` restituisce "il primo carattere". In Rust è un errore di compilazione:
+In TypeScript `s[0]` restituisce la prima unità di codice <Term id="utf-16">UTF-16</Term> come stringa di un carattere, che di solito è "il primo carattere". In Rust è un errore di compilazione:
 
 ```rust
 let s = String::from("hey");
@@ -129,13 +129,31 @@ Il motivo è che le stringhe sono UTF-8, una codifica a larghezza variabile: `è
 - `&s[a..b]` per una sottostringa tramite un intervallo di **byte**, che va in <Term id="panic">panic</Term> se `a` o `b` cadono a metà di un carattere.
 - Per i grafemi serve un <Term id="crate">crate</Term> come `unicode-segmentation`.
 
-<Callout type="compare" from="JavaScript / Python / Java">
-Le stringhe di JavaScript e Java sono internamente in <Term id="utf-16">UTF-16</Term>, quindi `"🦀".length` vale 2 e l'indicizzazione può spezzare un carattere a metà. Python 3 sceglie per ogni stringa una rappresentazione a larghezza fissa (1, 2 o 4 byte per code point) per rendere l'indicizzazione O(1), al prezzo di memoria e conversioni. Rust usa UTF-8 ovunque, la stessa codifica di file e rete, e sposta il costo nei rari punti in cui serve davvero l'accesso posizionale.
+<Callout type="compare" from="TypeScript">
+Le stringhe di TypeScript sono in UTF-16, quindi `"🦀".length` vale 2 e `"🦀"[0]` è mezzo carattere, un surrogato isolato. L'iterazione fa eccezione: `[..."🦀"]` ha un solo elemento, perché l'iteratore delle stringhe procede per code point, esattamente come `.chars()` in Rust. Attenzione a `len()` quando porti del codice: `"è".length` vale 1 in TypeScript, `"è".len()` vale 2 in Rust, perché conta i byte UTF-8. Rust usa UTF-8 ovunque, la stessa codifica di file e rete, quindi al confine non serve nessun passaggio con `TextEncoder`, e il costo si sposta nei rari punti in cui serve davvero l'accesso posizionale.
 </Callout>
 
 ## HashMap e la entry API
 
-`HashMap<K, V>` si trova in `std::collections` e funziona con qualsiasi tipo di chiave che implementi `Eq` e `Hash` (<Term id="derive">derivabili</Term> per i tuoi tipi). Le ricerche restituiscono <Term id="option">`Option<&V>`</Term> invece di `null` o di un `KeyError`. La **<Term id="entry-api">entry API</Term>** gestisce lo schema "inserisci se manca, poi aggiorna" con una sola ricerca nella tabella, e senza il problema del doppio borrow in cui incapperesti con un `get` seguito da un `insert`.
+`HashMap<K, V>` si trova in `std::collections` e funziona con qualsiasi tipo di chiave che implementi `Eq` e `Hash` (<Term id="derive">derivabili</Term> per i tuoi tipi). Le chiavi si confrontano per valore, quindi una tupla o una struct funzionano come chiave, mentre una `Map` di TypeScript confronta gli oggetti per identità e ti spinge a costruire chiavi stringa. Le ricerche restituiscono <Term id="option">`Option<&V>`</Term> dove `Map.get` restituisce `undefined`. La **<Term id="entry-api">entry API</Term>** gestisce lo schema "inserisci se manca, poi aggiorna" con una sola ricerca nella tabella, e senza il problema del doppio borrow in cui incapperesti con un `get` seguito da un `insert`.
+
+<Compare left="TypeScript">
+```ts
+const counts = new Map<string, number>();
+for (const word of text.split(" ")) {
+  counts.set(word, (counts.get(word) ?? 0) + 1);
+}
+// due ricerche per parola: get, poi set
+```
+
+```rust
+let mut counts: HashMap<&str, usize> = HashMap::new();
+for word in text.split(' ') {
+    *counts.entry(word).or_insert(0) += 1;
+}
+// una ricerca per parola: entry trova o inserisce
+```
+</Compare>
 
 <Playground title="Contare le parole con entry">
 ```rust
@@ -168,7 +186,7 @@ fn main() {
 ```
 </Playground>
 
-Due comportamenti predefiniti da conoscere: l'ordine di iterazione **non è specificato** (cambia da un'esecuzione all'altra), e l'<Term id="hasher">hasher</Term> predefinito, SipHash 1-3, è scelto per resistere agli attacchi di <Term id="hash-flooding">hash flooding</Term> più che per la velocità pura. Usa <Term id="btreemap">`BTreeMap`</Term> quando ti servono chiavi ordinate, e un hasher più veloce come `ahash` o `rustc-hash` quando le chiavi non sono controllate da un potenziale attaccante.
+Due comportamenti predefiniti da conoscere: l'ordine di iterazione **non è specificato** (cambia da un'esecuzione all'altra, mentre una `Map` di TypeScript itera in ordine di inserimento), e l'<Term id="hasher">hasher</Term> predefinito, SipHash 1-3, è scelto per resistere agli attacchi di <Term id="hash-flooding">hash flooding</Term> più che per la velocità pura. Usa <Term id="btreemap">`BTreeMap`</Term> quando ti servono chiavi ordinate, e un hasher più veloce come `ahash` o `rustc-hash` quando le chiavi non sono controllate da un potenziale attaccante.
 
 ## Tre modi di iterare
 
@@ -209,34 +227,32 @@ Iterare per valore non è una trappola per le prestazioni: sposta fuori ogni `St
 
 ## Verso il progetto
 
-Il comando `summary` di `ledger` è un problema di conteggio parole travestito: invece di contare parole, somma importi per categoria. Tutto quello che serve è in questa lezione: `lines()` e `splitn` per leggere il file dati, una `HashMap` con l'entry API per accumulare i totali, e `sort_by` per ordinare il risultato, dato che l'ordine di iterazione della mappa non è specificato.
+Il comando `summary` di `ledger` è un problema di conteggio parole travestito: invece di contare parole, somma importi per categoria. Tutto quello che serve è in questa lezione: `lines()` e `split_once` per leggere il file dati, una `HashMap` con l'entry API per accumulare i totali, e `sort_by` per ordinare il risultato, dato che l'ordine di iterazione della mappa non è specificato.
 
 <Playground title="ledger: totali per categoria">
 ```rust
 use std::collections::HashMap;
 
 fn main() {
-    // Il file dati di ledger: centesimi,categoria,nota (la nota può contenere virgole)
-    let file = "1250,food,lunch, with Ada\n4500,transport,monthly pass\n820,food,coffee beans\n";
+    // Il file dati di ledger: una riga `centesimi,categoria` per spesa
+    let file = "1250,food\n4500,transport\n820,food\n";
 
-    let mut totals: HashMap<&str, i64> = HashMap::new();
+    let mut totals: HashMap<&str, u64> = HashMap::new();
     for line in file.lines() {
-        let mut fields = line.splitn(3, ','); // al massimo 3 campi
-        let cents: i64 = fields.next().unwrap().parse().unwrap();
-        let category = fields.next().unwrap(); // &str preso in prestito da `file`
-        let note = fields.next().unwrap_or("");
-        println!("{cents:>6}  {category:<10} {note}");
+        let (cents, category) = line.split_once(',').unwrap(); // due &str presi in prestito da `file`
+        let cents: u64 = cents.parse().unwrap();
+        println!("{cents:>6}  {category}");
         *totals.entry(category).or_insert(0) += cents;
     }
 
-    let mut rows: Vec<(&str, i64)> = totals.into_iter().collect();
+    let mut rows: Vec<(&str, u64)> = totals.into_iter().collect();
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0))); // prima i più grandi, poi per nome
     println!("{rows:?}");
 }
 ```
 </Playground>
 
-Nota il tipo delle chiavi: `HashMap<&str, i64>`. Le chiavi sono prestiti dal testo invece di essere copiate in nuove `String`. `splitn(3, ',')` si ferma dopo la seconda virgola, quindi una nota può contenere virgole proprie. Le chiamate a `unwrap()` vanno bene in un abbozzo; il programma finale le sostituisce con la gestione degli errori della lezione precedente, e segnala il numero di riga di una voce corrotta.
+Nota il tipo delle chiavi: `HashMap<&str, u64>`. Le chiavi sono prestiti dal testo invece di essere copiate in nuove `String`. `split_once(',')` divide solo alla prima virgola, quindi una categoria può contenere virgole proprie. Le chiamate a `unwrap()` vanno bene in un abbozzo; il programma finale le sostituisce con la gestione degli errori della lezione precedente, e segnala il numero di riga di una voce corrotta.
 
 Con questo la cassetta degli attrezzi è completa. La prossima lezione mette insieme tutti i pezzi.
 

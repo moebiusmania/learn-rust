@@ -5,20 +5,20 @@ duration: 20
 tags: [rustup, cargo, rustc, edizioni]
 ---
 
-Se arrivi da JavaScript, Python o Java, la prima sorpresa non è la sintassi: è che **non c'è nessun <Term id="runtime">runtime</Term> da installare**. Installi una *<Term id="toolchain">toolchain</Term> di compilazione*, e quello che produce è un eseguibile nativo autosufficiente.
+Se arrivi da TypeScript, la prima sorpresa non è la sintassi: è che **non c'è nessun <Term id="runtime">runtime</Term> da installare**. Ai tuoi utenti non servono Node, Deno o Bun: installi una *<Term id="toolchain">toolchain</Term> di compilazione*, e quello che produce è un eseguibile nativo autosufficiente.
 
 ## La toolchain in un comando
 
-Rust si distribuisce tramite **<Term id="rustup">rustup</Term>**, un gestore di toolchain (simile a `nvm` o `pyenv`, ma ufficiale). Un'installazione di default ti dà:
+Rust si distribuisce tramite **<Term id="rustup">rustup</Term>**, un gestore di toolchain (simile a `nvm` o `fnm`, ma ufficiale). Un'installazione di default ti dà:
 
-| Strumento | Ruolo | Equivalente più vicino |
+| Strumento | Ruolo | Equivalente in TypeScript |
 | --- | --- | --- |
-| <Term id="rustc">`rustc`</Term> | Il compilatore | `javac`, `tsc`, `gcc` |
-| <Term id="cargo">`cargo`</Term> | Build system + package manager + test runner | `npm` + `webpack` + `jest`, `mvn`, `go` |
-| <Term id="std">`std`</Term> | Libreria standard, precompilata per il tuo <Term id="target">target</Term> | Class library del JDK |
-| <Term id="clippy">`clippy`</Term> | Linter con centinaia di controlli sugli idiomi | ESLint, Pylint |
-| <Term id="rustfmt">`rustfmt`</Term> | Formatter, un unico stile canonico | Prettier, gofmt, Black |
-| <Term id="rust-analyzer">`rust-analyzer`</Term> | Language server per il tuo editor | tsserver, Pylance |
+| <Term id="rustc">`rustc`</Term> | Il compilatore | `tsc`, ma produce codice macchina, non JavaScript |
+| <Term id="cargo">`cargo`</Term> | Build system + package manager + test runner | `npm` + un bundler + `vitest` |
+| <Term id="std">`std`</Term> | Libreria standard, precompilata per il tuo <Term id="target">target</Term> | I built-in di JavaScript più i moduli `node:` |
+| <Term id="clippy">`clippy`</Term> | Linter con centinaia di controlli sugli idiomi | ESLint con `typescript-eslint` |
+| <Term id="rustfmt">`rustfmt`</Term> | Formatter, un unico stile canonico | Prettier |
+| <Term id="rust-analyzer">`rust-analyzer`</Term> | Language server per il tuo editor | `tsserver` |
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -27,7 +27,7 @@ rustup target add wasm32-unknown-unknown   # target per la cross-compilazione
 ```
 
 <Callout type="note" title="Canali di rilascio ed edizioni">
-Una nuova versione **<Term id="release-channel">stable</Term>** esce ogni sei settimane, con una forte garanzia di retrocompatibilità. I cambiamenti di *sintassi* incompatibili vengono raggruppati in **<Term id="edition">edizioni</Term>** (2015, 2018, 2021, 2024), scelte per singolo <Term id="crate">crate</Term> in <Term id="cargo-toml">`Cargo.toml`</Term>. Crate su edizioni diverse si linkano tra loro senza problemi, quindi l'ecosistema non si spacca mai come è successo con Python 2 → 3.
+Una nuova versione **<Term id="release-channel">stable</Term>** esce ogni sei settimane, con una forte garanzia di retrocompatibilità. I cambiamenti di *sintassi* incompatibili vengono raggruppati in **<Term id="edition">edizioni</Term>** (2015, 2018, 2021, 2024), scelte per singolo <Term id="crate">crate</Term> in <Term id="cargo-toml">`Cargo.toml`</Term>. Crate su edizioni diverse si linkano tra loro senza problemi, quindi l'ecosistema non si spacca mai come è successo tra CommonJS ed ES module.
 </Callout>
 
 ## Cargo: un solo strumento per tutto il flusso di lavoro
@@ -56,8 +56,8 @@ edition = "2024"
 serde = { version = "1", features = ["derive"] }
 ```
 
-<Callout type="compare" from="npm / Maven">
-Le dipendenze vengono compilate **dai sorgenti** dentro il tuo binario: in esecuzione non esiste una cartella di librerie condivise come `node_modules`, né un classpath. L'output in `target/release/hello` gira su una macchina che non ha mai visto Rust.
+<Callout type="compare" from="TypeScript">
+Le dipendenze vengono compilate **dai sorgenti** dentro il tuo binario: in esecuzione non esiste una cartella `node_modules`, non c'è una fase di bundling e nessun `tsconfig.json` decide che forma ha l'output. Nemmeno i tipi vengono cancellati: dove `tsc` controlla i tipi e poi li butta via, `rustc` li usa per scegliere il codice macchina. L'output in `target/release/hello` gira su una macchina che non ha mai visto Rust.
 </Callout>
 
 ## Il tuo primo progetto
@@ -233,8 +233,8 @@ fn main() {
 Poi eseguilo, mettendo i tuoi argomenti dopo `--`, così Cargo li passa al programma invece di interpretarli lui:
 
 ```sh
-$ cargo run -q -- add 12.50 food lunch
-5 arguments: ["target/debug/ledger", "add", "12.50", "food", "lunch"]
+$ cargo run -q -- add 12.50 food
+4 arguments: ["target/debug/ledger", "add", "12.50", "food"]
 ```
 
 Il primo argomento è il percorso dell'eseguibile; l'input vero inizia all'indice 1. `Vec<String>` e `collect()` li vedrai nelle prossime lezioni; alla fine del percorso queste stringhe diventeranno comandi, importi e record.
