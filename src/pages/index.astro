@@ -1,4 +1,5 @@
 ---
+import HeadIcons from '@/components/HeadIcons.astro';
 import { localeUrl } from '@/lib/url';
 import { locales, defaultLocale } from '@/i18n/config';
 const targets = Object.fromEntries(locales.map((l) => [l, localeUrl(l)]));
@@ -8,7 +9,8 @@ const targets = Object.fromEntries(locales.map((l) => [l, localeUrl(l)]));
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Rust, for developers</title>
+    <title>Rust for TypeScript developers</title>
+    <HeadIcons appName="Rust for TS Devs" />
     <meta http-equiv="refresh" content={`2; url=${targets[defaultLocale]}`} />
     <script is:inline define:vars={{ targets, fallback: defaultLocale }}>
       let lang = null;

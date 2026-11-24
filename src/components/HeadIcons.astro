@@ -1,0 +1,23 @@
+---
+/**
+ * Icons, web app manifest and app-name metadata.
+ *
+ * Every href is prefixed with the deploy base. On GitHub Pages several projects
+ * share one origin, and a browser that finds no explicit icon or manifest falls
+ * back to the origin root (/favicon.ico, /apple-touch-icon.png), which belongs
+ * to a different project.
+ */
+import { url } from '@/lib/url';
+
+interface Props {
+  appName: string;
+}
+const { appName } = Astro.props;
+---
+<link rel="icon" href={url('/favicon.ico')} sizes="48x48" />
+<link rel="icon" type="image/svg+xml" href={url('/favicon.svg')} sizes="any" />
+<link rel="apple-touch-icon" sizes="180x180" href={url('/apple-touch-icon.png')} />
+<link rel="manifest" href={url('/manifest.webmanifest')} />
+<meta name="application-name" content={appName} />
+<meta name="apple-mobile-web-app-title" content={appName} />
+<meta name="mobile-web-app-capable" content="yes" />
