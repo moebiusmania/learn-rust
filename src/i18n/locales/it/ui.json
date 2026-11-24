@@ -1,8 +1,8 @@
 {
   "site": {
-    "title": "Rust, per sviluppatori",
-    "shortTitle": "Rust per Dev",
-    "description": "Un corso interattivo di Rust per sviluppatori che sanno già programmare. Tre percorsi: base, intermedio e avanzato."
+    "title": "Rust per sviluppatori TypeScript",
+    "shortTitle": "Rust per Dev TS",
+    "description": "Un corso interattivo di Rust per sviluppatori TypeScript. Impara ownership, borrowing e sistema dei tipi fianco a fianco con il TypeScript che scrivi già. Tre percorsi: base, intermedio e avanzato."
   },
   "nav": {
     "skipToContent": "Vai al contenuto",
@@ -22,20 +22,20 @@
     "nextTrack": "Prosegui con il percorso successivo"
   },
   "home": {
-    "eyebrow": "Un corso interattivo",
-    "heroTitle": "Impara Rust come hai imparato il tuo secondo linguaggio: per confronto.",
-    "heroLead": "Cicli, closure e generici li conosci già. Questo corso salta le basi della programmazione e si concentra su ciò che in Rust è davvero diverso: ownership, borrow checker, sistema dei tipi e un runtime ridotto quasi a zero.",
+    "eyebrow": "Un corso interattivo per sviluppatori TypeScript",
+    "heroTitle": "Impara Rust partendo dal TypeScript che scrivi già.",
+    "heroLead": "Closure, generici, union type e async/await li conosci già. Questo corso parte da lì e mostra, fianco a fianco con TypeScript, ciò che in Rust è davvero diverso: ownership, borrow checker, un sistema dei tipi più rigoroso e un runtime ridotto quasi a zero.",
     "cta": "Inizia il percorso base",
     "ctaSecondary": "Vedi tutti i percorsi",
-    "whyTitle": "Cosa rende Rust diverso",
+    "whyTitle": "Cosa cambia se arrivi da TypeScript",
     "why": [
-      { "title": "Nessun garbage collector", "text": "La memoria viene liberata in modo deterministico quando il suo proprietario esce dallo scope. Niente pause, niente finalizer, niente reference counting se non lo chiedi tu." },
-      { "title": "Verificato in compilazione", "text": "Data race, use-after-free e dereferenziazioni di null vengono rifiutati dal compilatore, non scoperti in produzione." },
-      { "title": "Astrazioni a costo zero", "text": "Iteratori, generici e closure vengono compilati nello stesso codice macchina che scriveresti a mano." },
-      { "title": "Gli errori sono valori", "text": "Niente eccezioni. Il fallimento fa parte della firma della funzione tramite Result e Option." }
+      { "title": "Nessun garbage collector", "text": "V8 libera la memoria al posto tuo, prima o poi. In Rust un valore viene liberato in modo deterministico quando il suo proprietario esce dallo scope. Niente pause del GC, niente reference counting se non lo chiedi tu." },
+      { "title": "Tipi che valgono anche a runtime", "text": "Niente any, niente null o undefined, niente tipi cancellati prima dell'esecuzione. Data race, use-after-free e valori mancanti vengono rifiutati dal compilatore, non scoperti in produzione." },
+      { "title": "Astrazioni a costo zero", "text": "Iteratori, generici e closure vengono compilati in anticipo nello stesso codice macchina che scriveresti a mano. Niente JIT, niente warm-up." },
+      { "title": "Gli errori sono valori", "text": "Niente try/catch, niente valori lanciati di tipo unknown. Il fallimento fa parte della firma della funzione tramite Result e Option." }
     ],
     "tracksTitle": "Tre percorsi",
-    "tracksLead": "Ogni percorso alterna spiegazioni dei concetti, diagrammi ed esempi eseguibili. Ogni blocco di codice segnato come playground si può modificare ed eseguire nel browser.",
+    "tracksLead": "Ogni percorso alterna spiegazioni dei concetti, diagrammi ed esempi eseguibili. Ogni blocco di codice segnato come playground si può modificare ed eseguire nel browser. Il percorso base confronta ogni concetto con TypeScript; i percorsi successivi attingono anche ad altri linguaggi dove serve.",
     "lessonsCount": "{count} lezioni",
     "minutes": "~{count} min",
     "startTrack": "Apri il percorso",
@@ -86,7 +86,7 @@
     "compare": "Se arrivi da…"
   },
   "footer": {
-    "text": "Pensato per sviluppatori che passano a Rust. Gli esempi vengono eseguiti su play.rust-lang.org.",
+    "text": "Pensato per sviluppatori TypeScript che passano a Rust. Gli esempi vengono eseguiti su play.rust-lang.org.",
     "notAffiliated": "Non affiliato alla Rust Foundation."
   },
   "notFound": {

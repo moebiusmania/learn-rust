@@ -1,7 +1,7 @@
-# Rust, for developers
+# Rust for TypeScript developers
 
-An interactive, bilingual (EN/IT) Rust course for developers who already know how to
-program. Three tracks (basic, intermediate, advanced) mixing explanations,
+An interactive, bilingual (EN/IT) Rust course for TypeScript developers. It teaches Rust
+side by side with the TypeScript you already write. Three tracks (basic, intermediate, advanced) mixing explanations,
 SVG/canvas visualizations and editable code that runs on the official Rust Playground.
 
 Built with [Astro](https://astro.build) and [Bun](https://bun.sh). Static output,
